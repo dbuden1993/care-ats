@@ -57,7 +57,7 @@ function fmtDuration(ms?: number | null) {
 
 function Badge({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-md border px-2 py-0.5 text-xs text-gray-700">
+    <span className="inline-flex items-center rounded-lg border px-4 py-0.5 text-base text-gray-700">
       {children}
     </span>
   );
@@ -65,7 +65,7 @@ function Badge({ children }: { children: React.ReactNode }) {
 
 function TagChip({ tag, onRemove }: { tag: string; onRemove?: () => void }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border bg-white px-2 py-0.5 text-xs text-gray-700">
+    <span className="inline-flex items-center gap-3 rounded-full border bg-white px-4 py-0.5 text-base text-gray-700">
       <span>{tag}</span>
       {onRemove ? (
         <button
@@ -629,7 +629,7 @@ export default function CandidatesTableClient({
         {/* LEFT */}
         <div className="space-y-3">
           {selectedCount > 0 && !selectAllMatching && totalMatchingCount > selectedIds.size && (
-            <div className="text-sm text-gray-600">
+            <div className="text-base text-gray-600">
               Selected <span className="font-medium">{selectedIds.size}</span> on this page.{" "}
               <button
                 className="underline underline-offset-2"
@@ -646,7 +646,7 @@ export default function CandidatesTableClient({
           )}
 
           {selectedCount > 0 && selectAllMatching && (
-            <div className="text-sm text-gray-600">
+            <div className="text-base text-gray-600">
               All <span className="font-medium">{selectedCount}</span> matching candidates are selected
               {excludedIds.size > 0 ? (
                 <>
@@ -661,9 +661,9 @@ export default function CandidatesTableClient({
             </div>
           )}
 
-          <div className="rounded-lg border overflow-hidden bg-white">
+          <div className="rounded-xl border overflow-hidden bg-white">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-100">
                 <tr className="text-left">
                   <th className="w-10 px-3 py-2">
                     <input
@@ -673,13 +673,13 @@ export default function CandidatesTableClient({
                       onChange={(e) => toggleAllOnPage(e.target.checked)}
                     />
                   </th>
-                  <th className="px-3 py-2">Name</th>
-                  {show.phone && <th className="px-3 py-2">Phone</th>}
-                  {show.roles && <th className="px-3 py-2">Roles</th>}
-                  {show.tags && <th className="px-3 py-2">Tags</th>}
-                  {show.badges && <th className="px-3 py-2">Badges</th>}
-                  {show.last_called && <th className="px-3 py-2">Last called</th>}
-                  {show.actions && <th className="px-3 py-2 text-right">Actions</th>}
+                  <th className="px-6 py-4">Name</th>
+                  {show.phone && <th className="px-6 py-4">Phone</th>}
+                  {show.roles && <th className="px-6 py-4">Roles</th>}
+                  {show.tags && <th className="px-6 py-4">Tags</th>}
+                  {show.badges && <th className="px-6 py-4">Badges</th>}
+                  {show.last_called && <th className="px-6 py-4">Last called</th>}
+                  {show.actions && <th className="px-6 py-4 text-right">Actions</th>}
                 </tr>
               </thead>
 
@@ -702,8 +702,8 @@ export default function CandidatesTableClient({
                     <>
                       <tr
                         key={r.id}
-                        className={`border-t align-top hover:bg-gray-50/60 ${
-                          selectedCount === 0 && (focusedRow?.id === r.id || isExpanded) ? "bg-gray-50/80" : ""
+                        className={`border-t align-top hover:bg-gray-100/60 ${
+                          selectedCount === 0 && (focusedRow?.id === r.id || isExpanded) ? "bg-gray-100/80" : ""
                         }`}
                         onMouseEnter={() => { if (selectedCount === 0) setFocusedRow(r); }}
                         onMouseLeave={() => { if (selectedCount === 0 && !isExpanded) setFocusedRow(null); }}
@@ -711,7 +711,7 @@ export default function CandidatesTableClient({
                         role="button"
                         tabIndex={0}
                       >
-                        <td className="px-3 py-3">
+                        <td className="px-8 py-6">
                           <input
                             type="checkbox"
                             checked={isRowSelected(r.id)}
@@ -720,11 +720,11 @@ export default function CandidatesTableClient({
                           />
                         </td>
 
-                        <td className="px-3 py-3">
+                        <td className="px-8 py-6">
                           <div className="flex items-start gap-2">
                             <button
                               type="button"
-                              className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-md border text-xs hover:bg-gray-50"
+                              className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-lg border text-base hover:bg-gray-100"
                               title={isExpanded ? "Collapse" : "Expand"}
                               onClick={(e) => { e.stopPropagation(); toggleExpanded(r); }}
                             >
@@ -737,12 +737,12 @@ export default function CandidatesTableClient({
                               </Link>
 
                               {previewHtml ? (
-                                <div className="mt-1 text-xs text-gray-600 line-clamp-2">
+                                <div className="mt-1 text-base text-gray-600 line-clamp-2">
                                   {r.last_note_text ? "📝 " : "🤖 "}
                                   <span dangerouslySetInnerHTML={{ __html: previewHtml }} />
                                 </div>
                               ) : preview ? (
-                                <div className="mt-1 text-xs text-gray-600 line-clamp-2">
+                                <div className="mt-1 text-base text-gray-600 line-clamp-2">
                                   {r.last_note_text ? "📝 " : "🤖 "}
                                   {preview}
                                 </div>
@@ -751,26 +751,26 @@ export default function CandidatesTableClient({
                           </div>
                         </td>
 
-                        {show.phone && <td className="px-3 py-3 text-gray-700">{r.phone_e164}</td>}
-                        {show.roles && <td className="px-3 py-3 text-gray-700">{r.roles}</td>}
+                        {show.phone && <td className="px-8 py-6 text-gray-700">{r.phone_e164}</td>}
+                        {show.roles && <td className="px-8 py-6 text-gray-700">{r.roles}</td>}
 
                         {show.tags && (
-                          <td className="px-3 py-3">
+                          <td className="px-8 py-6">
                             {tags.length ? (
                               <div className="flex flex-wrap gap-1.5">
                                 {tags.slice(0, 3).map((t) => (
                                   <TagChip key={t} tag={t} />
                                 ))}
-                                {tags.length > 3 ? <span className="text-xs text-gray-500">+{tags.length - 3}</span> : null}
+                                {tags.length > 3 ? <span className="text-base text-gray-500">+{tags.length - 3}</span> : null}
                               </div>
                             ) : (
-                              <span className="text-xs text-gray-400">—</span>
+                              <span className="text-base text-gray-400">—</span>
                             )}
                           </td>
                         )}
 
                         {show.badges && (
-                          <td className="px-3 py-3">
+                          <td className="px-8 py-6">
                             <div className="flex flex-wrap gap-1.5">
                               <Badge>{r.status}</Badge>
                               {typeof r.notes_count === "number" && <Badge>📝 {r.notes_count}</Badge>}
@@ -784,14 +784,14 @@ export default function CandidatesTableClient({
                         )}
 
                         {show.last_called && (
-                          <td className="px-3 py-3 text-gray-700">{fmtWhen(r.last_called_at || r.last_call_time)}</td>
+                          <td className="px-8 py-6 text-gray-700">{fmtWhen(r.last_called_at || r.last_call_time)}</td>
                         )}
 
                         {show.actions && (
-                          <td className="px-3 py-3 text-right">
+                          <td className="px-8 py-6 text-right">
                             <div className="inline-flex items-center gap-2">
                               <select
-                                className="rounded-md border px-2 py-1 text-xs"
+                                className="rounded-lg border px-4 py-2 text-xs"
                                 value={r.status}
                                 onChange={(e) => setStatusSingle(String(r.id), e.target.value as Status)}
                                 disabled={busy}
@@ -804,7 +804,7 @@ export default function CandidatesTableClient({
                               </select>
 
                               <button
-                                className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                                className="rounded-lg border px-4 py-2 text-base hover:bg-gray-100"
                                 onClick={(e) => { e.stopPropagation(); copyPhone(r.phone_e164); }}
                                 disabled={busy}
                                 type="button"
@@ -813,7 +813,7 @@ export default function CandidatesTableClient({
                               </button>
 
                               <button
-                                className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                                className="rounded-lg border px-4 py-2 text-base hover:bg-gray-100"
                                 onClick={(e) => { e.stopPropagation(); setNoteOpen(true); }}
                                 disabled={busy}
                                 type="button"
@@ -827,16 +827,16 @@ export default function CandidatesTableClient({
 
                       {isExpanded && (
                         <tr className="border-t bg-white" key={`${r.id}-details`}>
-                          <td colSpan={colSpan} className="px-3 py-3">
-                            <div className="rounded-xl border bg-gray-50 p-4">
+                          <td colSpan={colSpan} className="px-8 py-6">
+                            <div className="rounded-xl border bg-gray-100 p-4">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="text-sm font-medium">Details</div>
+                                <div className="text-base font-medium">Details</div>
                                 <div className="flex items-center gap-2">
-                                  <Link href={href} className="rounded-md border bg-white px-3 py-1.5 text-xs hover:bg-gray-50">
+                                  <Link href={href} className="rounded-lg border bg-white px-3 py-1.5 text-base hover:bg-gray-100">
                                     Open profile
                                   </Link>
                                   <button
-                                    className="rounded-md border bg-white px-3 py-1.5 text-xs hover:bg-gray-50"
+                                    className="rounded-lg border bg-white px-3 py-1.5 text-base hover:bg-gray-100"
                                     onClick={() => copyPhone(r.phone_e164)}
                                     type="button"
                                   >
@@ -845,8 +845,8 @@ export default function CandidatesTableClient({
                                 </div>
                               </div>
 
-                              <div className="mt-3 rounded-lg bg-white p-3">
-                                <div className="text-xs font-medium text-gray-700 mb-2">Candidate tags</div>
+                              <div className="mt-3 rounded-xl bg-white p-3">
+                                <div className="text-base font-medium text-gray-700 mb-2">Candidate tags</div>
                                 {tags.length ? (
                                   <div className="flex flex-wrap gap-1.5">
                                     {tags.map((t) => (
@@ -858,39 +858,39 @@ export default function CandidatesTableClient({
                                     ))}
                                   </div>
                                 ) : (
-                                  <div className="text-sm text-gray-600">No tags.</div>
+                                  <div className="text-base text-gray-600">No tags.</div>
                                 )}
                               </div>
 
                               <div className="mt-3">
-                                <div className="text-xs font-medium text-gray-700 mb-2">Recent calls</div>
+                                <div className="text-base font-medium text-gray-700 mb-2">Recent calls</div>
                                 {!cache || cache.loading ? (
-                                  <div className="text-sm text-gray-600">Loading…</div>
+                                  <div className="text-base text-gray-600">Loading…</div>
                                 ) : cache.error ? (
-                                  <div className="text-sm text-red-600">Failed: {cache.error}</div>
+                                  <div className="text-base text-red-600">Failed: {cache.error}</div>
                                 ) : calls.length === 0 ? (
-                                  <div className="text-sm text-gray-600">No calls found.</div>
+                                  <div className="text-base text-gray-600">No calls found.</div>
                                 ) : (
                                   <div className="space-y-2">
                                     {calls.map((c) => (
-                                      <div key={String(c.id ?? c.call_time ?? Math.random())} className="rounded-lg border bg-white p-3">
+                                      <div key={String(c.id ?? c.call_time ?? Math.random())} className="rounded-xl border bg-white p-3">
                                         <div className="flex flex-wrap items-center justify-between gap-2">
-                                          <div className="text-xs text-gray-600">
+                                          <div className="text-base text-gray-600">
                                             <span className="font-medium">{c.direction ? String(c.direction).toUpperCase() : "CALL"}</span> · {fmtWhen(c.call_time ?? null)}
                                             {c.duration_ms ? <> · {fmtDuration(c.duration_ms)}</> : null}
                                             {c.energy_score != null ? <> · ⚡ {c.energy_score}</> : null}
                                           </div>
                                           {c.recording_url ? (
-                                            <a href={String(c.recording_url)} target="_blank" rel="noreferrer" className="text-xs underline underline-offset-2 hover:opacity-80">
+                                            <a href={String(c.recording_url)} target="_blank" rel="noreferrer" className="text-base underline underline-offset-2 hover:opacity-80">
                                               Recording →
                                             </a>
                                           ) : (
-                                            <span className="text-xs text-gray-400">No recording</span>
+                                            <span className="text-base text-gray-400">No recording</span>
                                           )}
                                         </div>
                                         {c.ai_recap ? (
-                                          <div className="mt-2 text-sm text-gray-800 leading-snug">
-                                            <span className="text-xs text-gray-500 mr-2">Recap:</span>
+                                          <div className="mt-2 text-base text-gray-800 leading-snug">
+                                            <span className="text-base text-gray-500 mr-2">Recap:</span>
                                             {String(c.ai_recap).length > 280 ? String(c.ai_recap).slice(0, 280) + "…" : String(c.ai_recap)}
                                           </div>
                                         ) : null}
@@ -916,14 +916,14 @@ export default function CandidatesTableClient({
           <div className="sticky top-6 space-y-3">
             {/* Sort */}
             <div className="rounded-xl border bg-white p-4">
-              <div className="text-sm font-medium">Sort</div>
-              <div className="mt-1 text-xs text-gray-500">
+              <div className="text-base font-medium">Sort</div>
+              <div className="mt-1 text-base text-gray-500">
                 {qTrim ? "Search results are sorted by relevance." : "Saved in URL + saved views."}
               </div>
 
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <select
-                  className="w-full rounded-md border px-3 py-2 text-sm"
+                  className="w-full rounded-lg border px-3 py-2 text-sm"
                   value={sort}
                   disabled={!!qTrim}
                   onChange={(e) => setSortInUrl(e.target.value as SortKey)}
@@ -937,7 +937,7 @@ export default function CandidatesTableClient({
                 </select>
 
                 <select
-                  className="w-full rounded-md border px-3 py-2 text-sm"
+                  className="w-full rounded-lg border px-3 py-2 text-sm"
                   value={dir}
                   disabled={!!qTrim || sort === "relevance"}
                   onChange={(e) => setSortInUrl(sort, e.target.value as SortDir)}
@@ -948,7 +948,7 @@ export default function CandidatesTableClient({
               </div>
 
               {weekend !== "any" && !qTrim ? (
-                <div className="mt-2 text-xs text-gray-500">
+                <div className="mt-2 text-base text-gray-500">
                   Weekend filter uses RPC mode, so only “Last called” sorting is supported here.
                 </div>
               ) : null}
@@ -956,8 +956,8 @@ export default function CandidatesTableClient({
 
             {/* Filter by tags (URL) */}
             <div className="rounded-xl border bg-white p-4">
-              <div className="text-sm font-medium">Filter by tags</div>
-              <div className="mt-1 text-xs text-gray-500">Matches candidates containing <span className="font-medium">all</span> selected tags.</div>
+              <div className="text-base font-medium">Filter by tags</div>
+              <div className="mt-1 text-base text-gray-500">Matches candidates containing <span className="font-medium">all</span> selected tags.</div>
 
               {selectedTags.length ? (
                 <div className="mt-3 flex flex-wrap gap-1.5">
@@ -966,12 +966,12 @@ export default function CandidatesTableClient({
                   ))}
                 </div>
               ) : (
-                <div className="mt-3 text-sm text-gray-600">No tag filters applied.</div>
+                <div className="mt-3 text-base text-gray-600">No tag filters applied.</div>
               )}
 
               <div className="mt-3 relative">
                 <input
-                  className="w-full rounded-md border px-3 py-2 text-sm"
+                  className="w-full rounded-lg border px-3 py-2 text-sm"
                   placeholder="Type to search tags…"
                   value={tagFilterInput}
                   onChange={(e) => setTagFilterInput(e.target.value)}
@@ -980,14 +980,14 @@ export default function CandidatesTableClient({
                 />
 
                 {tagFilterOpen && tagSuggest.length > 0 ? (
-                  <div className="absolute z-20 mt-1 w-full rounded-md border bg-white shadow-sm overflow-hidden">
+                  <div className="absolute z-20 mt-1 w-full rounded-lg border bg-white shadow-lg overflow-hidden">
                     {tagSuggest.map((s) => {
                       const already = selectedTags.includes(s.tag);
                       return (
                         <button
                           type="button"
                           key={s.tag}
-                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center justify-between"
+                          className="w-full px-3 py-2 text-left text-base hover:bg-gray-100 flex items-center justify-between"
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => {
                             if (!already) addTagToUrl(s.tag);
@@ -995,7 +995,7 @@ export default function CandidatesTableClient({
                           }}
                         >
                           <span className="font-medium">{s.tag}</span>
-                          <span className="text-xs text-gray-500">{already ? "Selected" : `${s.uses} uses`}</span>
+                          <span className="text-base text-gray-500">{already ? "Selected" : `${s.uses} uses`}</span>
                         </button>
                       );
                     })}
@@ -1006,7 +1006,7 @@ export default function CandidatesTableClient({
               <div className="mt-2 flex gap-2">
                 <button
                   type="button"
-                  className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50"
+                  className="rounded-lg border px-3 py-2 text-base hover:bg-gray-100"
                   onClick={() => {
                     const t = parseTagInput(tagFilterInput);
                     if (!t.length) return;
@@ -1019,7 +1019,7 @@ export default function CandidatesTableClient({
 
                 <button
                   type="button"
-                  className="ml-auto rounded-md border px-3 py-2 text-sm hover:bg-gray-50"
+                  className="ml-auto rounded-lg border px-3 py-2 text-base hover:bg-gray-100"
                   onClick={() => setTagsInUrl([])}
                   disabled={!selectedTags.length}
                 >
@@ -1030,8 +1030,8 @@ export default function CandidatesTableClient({
 
             {/* Edit tags (candidate tags) */}
             <div className="rounded-xl border bg-white p-4">
-              <div className="text-sm font-medium">Edit candidate tags</div>
-              <div className="mt-1 text-xs text-gray-500">
+              <div className="text-base font-medium">Edit candidate tags</div>
+              <div className="mt-1 text-base text-gray-500">
                 {selectedCount > 0 ? (
                   <>Applies to <span className="font-medium">{selectedCount}</span> selected.</>
                 ) : focusedRow ? (
@@ -1043,7 +1043,7 @@ export default function CandidatesTableClient({
 
               <div className="mt-3">
                 <input
-                  className="w-full rounded-md border px-3 py-2 text-sm"
+                  className="w-full rounded-lg border px-3 py-2 text-sm"
                   placeholder="e.g. spinal, hoist, driver"
                   value={tagEditInput}
                   onChange={(e) => setTagEditInput(e.target.value)}
@@ -1053,7 +1053,7 @@ export default function CandidatesTableClient({
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  className="rounded-md bg-black px-3 py-2 text-sm text-white disabled:opacity-60"
+                  className="rounded-lg bg-black px-3 py-2 text-base text-white disabled:opacity-60"
                   onClick={addTagsToCandidates}
                   disabled={busy || (!selectedCount && !focusedRow)}
                 >
@@ -1062,7 +1062,7 @@ export default function CandidatesTableClient({
 
                 <button
                   type="button"
-                  className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-60"
+                  className="rounded-lg border px-3 py-2 text-base hover:bg-gray-100 disabled:opacity-60"
                   onClick={removeTagsFromCandidates}
                   disabled={busy || (!selectedCount && !focusedRow)}
                 >
@@ -1075,12 +1075,12 @@ export default function CandidatesTableClient({
             <div className="rounded-xl border bg-white p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-sm font-medium">Columns</div>
-                  <div className="mt-0.5 text-xs text-gray-500">Saved in URL + saved views.</div>
+                  <div className="text-base font-medium">Columns</div>
+                  <div className="mt-0.5 text-base text-gray-500">Saved in URL + saved views.</div>
                 </div>
                 <button
                   type="button"
-                  className="text-xs underline underline-offset-2 text-gray-600 hover:text-gray-900"
+                  className="text-base underline underline-offset-2 text-gray-600 hover:text-gray-900"
                   onClick={() => updateCols(DEFAULT_COLS)}
                 >
                   Reset
@@ -1107,7 +1107,7 @@ export default function CandidatesTableClient({
                 onAddNote={() => setNoteOpen(true)}
               />
             ) : (
-              <div className="rounded-xl border bg-white p-4 text-sm text-gray-600">
+              <div className="rounded-xl border bg-white p-4 text-base text-gray-600">
                 Hover a candidate to preview.
               </div>
             )}
@@ -1115,27 +1115,27 @@ export default function CandidatesTableClient({
             {/* Bulk actions quick panel */}
             {selectedCount > 0 ? (
               <div className="rounded-xl border bg-white p-4">
-                <div className="text-sm font-medium">Bulk actions</div>
-                <div className="mt-1 text-xs text-gray-500">
+                <div className="text-base font-medium">Bulk actions</div>
+                <div className="mt-1 text-base text-gray-500">
                   {selectAllMatching ? "All matching selected (respects tags now)." : "Selected on this page."}
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50" onClick={() => bulkSetStatus("shortlisted")} disabled={busy}>
+                  <button className="rounded-lg border px-3 py-2 text-base hover:bg-gray-100" onClick={() => bulkSetStatus("shortlisted")} disabled={busy}>
                     Shortlist
                   </button>
-                  <button className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50" onClick={() => bulkSetStatus("rejected")} disabled={busy}>
+                  <button className="rounded-lg border px-3 py-2 text-base hover:bg-gray-100" onClick={() => bulkSetStatus("rejected")} disabled={busy}>
                     Reject
                   </button>
-                  <button className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50" onClick={() => bulkSetStatus("new")} disabled={busy}>
+                  <button className="rounded-lg border px-3 py-2 text-base hover:bg-gray-100" onClick={() => bulkSetStatus("new")} disabled={busy}>
                     Reset
                   </button>
-                  <button className="rounded-md border px-3 py-2 text-sm hover:bg-gray-50" onClick={() => setNoteOpen(true)} disabled={busy}>
+                  <button className="rounded-lg border px-3 py-2 text-base hover:bg-gray-100" onClick={() => setNoteOpen(true)} disabled={busy}>
                     Add note
                   </button>
                 </div>
 
-                <button className="mt-2 w-full rounded-md border px-3 py-2 text-sm hover:bg-gray-50" onClick={clearSelection} disabled={busy}>
+                <button className="mt-2 w-full rounded-lg border px-3 py-2 text-base hover:bg-gray-100" onClick={clearSelection} disabled={busy}>
                   Clear selection
                 </button>
               </div>
@@ -1147,21 +1147,21 @@ export default function CandidatesTableClient({
       {/* Note modal */}
       {noteOpen && (
         <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-xl bg-white border shadow-sm p-4 space-y-3">
+          <div className="w-full max-w-lg rounded-xl bg-white border shadow-lg p-4 space-y-3">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="font-medium">Add note</div>
-                <div className="text-sm text-gray-600">
+                <div className="text-base text-gray-600">
                   This will add the same note to <span className="font-medium">{selectedCount || 1}</span> candidate(s).
                 </div>
               </div>
-              <button className="px-2 py-1 rounded-md border hover:bg-gray-50" onClick={() => setNoteOpen(false)} disabled={busy}>
+              <button className="px-2 py-2 rounded-lg border hover:bg-gray-100" onClick={() => setNoteOpen(false)} disabled={busy}>
                 ✕
               </button>
             </div>
 
             <textarea
-              className="w-full min-h-[120px] rounded-md border p-2 text-sm"
+              className="w-full min-h-[120px] rounded-lg border p-2 text-sm"
               placeholder="Type the note…"
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
@@ -1169,11 +1169,11 @@ export default function CandidatesTableClient({
             />
 
             <div className="flex justify-end gap-2">
-              <button className="rounded-md border px-3 py-1.5 hover:bg-gray-50" onClick={() => setNoteOpen(false)} disabled={busy}>
+              <button className="rounded-lg border px-3 py-1.5 hover:bg-gray-100" onClick={() => setNoteOpen(false)} disabled={busy}>
                 Cancel
               </button>
 
-              <button className="rounded-md bg-black px-3 py-1.5 text-white disabled:opacity-60" onClick={bulkAddNote} disabled={busy || !noteText.trim()}>
+              <button className="rounded-lg bg-black px-3 py-1.5 text-white disabled:opacity-60" onClick={bulkAddNote} disabled={busy || !noteText.trim()}>
                 {busy ? "Adding…" : "Add note"}
               </button>
             </div>

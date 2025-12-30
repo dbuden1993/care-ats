@@ -145,7 +145,7 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
   }
 
   function tabClass(active: boolean) {
-    return `rounded-md border px-3 py-1 text-sm ${active ? "bg-black text-white border-black" : "hover:bg-gray-50"}`;
+    return `rounded-lg border px-6 py-3 text-base ${active ? "bg-black text-white border-black" : "hover:bg-gray-50"}`;
   }
 
   function buildHref(overrides: Partial<{ status: string; page: number }>) {
@@ -193,8 +193,8 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
   return (
     <main className="mx-auto max-w-6xl p-6">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Candidates</h1>
-        <Link href="/pipeline" className="rounded-md border px-3 py-1 text-sm hover:bg-gray-50">
+        <h1 className="text-5xl font-semibold">Candidates</h1>
+        <Link href="/pipeline" className="rounded-lg border px-6 py-3 text-base hover:bg-gray-50">
           Pipeline
         </Link>
       </div>
@@ -223,36 +223,36 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
         }}
       />
 
-      <form className="mt-4 grid gap-3 rounded-lg border p-4 md:grid-cols-4">
+      <form className="mt-4 grid gap-3 rounded-xl border p-4 md:grid-cols-4">
         <input
           name="q"
           defaultValue={q}
           placeholder='Search… e.g. "spinal energetic driver"'
-          className="w-full rounded-md border px-3 py-2"
+          className="w-full rounded-lg border px-3 py-2"
         />
 
-        <select name="driver" defaultValue={driver} className="w-full rounded-md border px-3 py-2">
+        <select name="driver" defaultValue={driver} className="w-full rounded-lg border px-3 py-2">
           <option value="any">Driver: Any</option>
           <option value="Yes">Driver: Yes</option>
           <option value="No">Driver: No</option>
           <option value="Unknown">Driver: Unknown</option>
         </select>
 
-        <select name="dbs" defaultValue={dbs} className="w-full rounded-md border px-3 py-2">
+        <select name="dbs" defaultValue={dbs} className="w-full rounded-lg border px-3 py-2">
           <option value="any">DBS Update: Any</option>
           <option value="Yes">DBS Update: Yes</option>
           <option value="No">DBS Update: No</option>
           <option value="Unknown">DBS Update: Unknown</option>
         </select>
 
-        <select name="training" defaultValue={training} className="w-full rounded-md border px-3 py-2">
+        <select name="training" defaultValue={training} className="w-full rounded-lg border px-3 py-2">
           <option value="any">Training: Any</option>
           <option value="Yes">Training: Yes</option>
           <option value="No">Training: No</option>
           <option value="Unknown">Training: Unknown</option>
         </select>
 
-        <select name="status" defaultValue={status} className="w-full rounded-md border px-3 py-2">
+        <select name="status" defaultValue={status} className="w-full rounded-lg border px-3 py-2">
           <option value="any">Status: Any</option>
           <option value="new">Status: New</option>
           <option value="shortlisted">Status: Shortlisted</option>
@@ -260,17 +260,17 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
         </select>
 
         <div className="md:col-span-4 flex items-center gap-2">
-          <div className="text-sm text-gray-700">Weekend</div>
-          <div className="inline-flex rounded-md border overflow-hidden">
-            <label className={`px-3 py-2 text-sm cursor-pointer ${weekend === "any" ? "bg-gray-100" : "bg-white hover:bg-gray-50"}`}>
+          <div className="text-base text-gray-700">Weekend</div>
+          <div className="inline-flex rounded-lg border overflow-hidden">
+            <label className={`px-3 py-2 text-base cursor-pointer ${weekend === "any" ? "bg-gray-100" : "bg-white hover:bg-gray-50"}`}>
               <input type="radio" name="weekend" value="any" defaultChecked={weekend === "any"} className="hidden" />
               Any
             </label>
-            <label className={`px-3 py-2 text-sm cursor-pointer border-l ${weekend === "yes" ? "bg-gray-100" : "bg-white hover:bg-gray-50"}`}>
+            <label className={`px-3 py-2 text-base cursor-pointer border-l ${weekend === "yes" ? "bg-gray-100" : "bg-white hover:bg-gray-50"}`}>
               <input type="radio" name="weekend" value="yes" defaultChecked={weekend === "yes"} className="hidden" />
               Yes
             </label>
-            <label className={`px-3 py-2 text-sm cursor-pointer border-l ${weekend === "no" ? "bg-gray-100" : "bg-white hover:bg-gray-50"}`}>
+            <label className={`px-3 py-2 text-base cursor-pointer border-l ${weekend === "no" ? "bg-gray-100" : "bg-white hover:bg-gray-50"}`}>
               <input type="radio" name="weekend" value="no" defaultChecked={weekend === "no"} className="hidden" />
               No
             </label>
@@ -283,8 +283,8 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
         <input type="hidden" name="cols" value={colsParam} />
 
         <div className="md:col-span-4 flex gap-2">
-          <button className="rounded-md bg-black px-4 py-2 text-white">Search</button>
-          <Link className="rounded-md border px-4 py-2" href="/">
+          <button className="rounded-lg bg-black px-8 py-4 text-white">Search</button>
+          <Link className="rounded-lg border px-8 py-4" href="/">
             Reset
           </Link>
         </div>
@@ -293,7 +293,7 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
       <AppliedFilterChips />
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm text-gray-600">
+        <div className="text-base text-gray-600">
           {totalMatchingCount ? (
             <>
               Showing <span className="font-medium">{from}</span>–<span className="font-medium">{to}</span> of{" "}
@@ -307,16 +307,16 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
         <div className="flex items-center gap-2">
           <Link
             href={pageHref(Math.max(1, page - 1))}
-            className={`rounded-md border px-3 py-1 text-sm ${hasPrev ? "hover:bg-gray-50" : "opacity-50 pointer-events-none"}`}
+            className={`rounded-lg border px-6 py-3 text-base ${hasPrev ? "hover:bg-gray-50" : "opacity-50 pointer-events-none"}`}
           >
             Prev
           </Link>
-          <div className="text-sm text-gray-600">
+          <div className="text-base text-gray-600">
             Page <span className="font-medium">{page}</span> / <span className="font-medium">{totalPages}</span>
           </div>
           <Link
             href={pageHref(Math.min(totalPages, page + 1))}
-            className={`rounded-md border px-3 py-1 text-sm ${hasNext ? "hover:bg-gray-50" : "opacity-50 pointer-events-none"}`}
+            className={`rounded-lg border px-6 py-3 text-base ${hasNext ? "hover:bg-gray-50" : "opacity-50 pointer-events-none"}`}
           >
             Next
           </Link>
@@ -324,13 +324,13 @@ export default async function Page({ searchParams }: { searchParams: AnySP }) {
       </div>
 
       {error && (
-        <div className="mt-6 rounded-lg border p-4 text-sm text-red-600">
+        <div className="mt-6 rounded-xl border p-4 text-base text-red-600">
           Error loading candidates: {error.message}
         </div>
       )}
 
       {!error && (data?.length ?? 0) === 0 && (
-        <div className="mt-6 rounded-lg border p-4 text-sm text-gray-600">No matches.</div>
+        <div className="mt-6 rounded-xl border p-4 text-base text-gray-600">No matches.</div>
       )}
 
       {!error && (data?.length ?? 0) > 0 && (

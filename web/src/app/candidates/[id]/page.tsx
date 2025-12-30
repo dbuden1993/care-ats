@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import ActionsPanel from "./ActionsPanel";
+import TrackView from "./TrackView";
 
 function isUuid(s: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
@@ -84,6 +84,8 @@ export default async function CandidatePage({ params }: { params: any }) {
 
   return (
     <main className="mx-auto max-w-6xl p-6">
+      <TrackView candidate={candidate} />
+      
       <Link href="/" className="text-sm underline underline-offset-2">
         ← Back to candidates
       </Link>
