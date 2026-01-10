@@ -5,12 +5,13 @@ interface Props {
   onSearch: (query: string) => void;
   placeholder?: string;
   suggestions?: string[];
+  initialValue?: string;
 }
 
 const RECENT_KEY = 'recent_searches';
 
-export default function SearchBar({ onSearch, placeholder = 'Search candidates...', suggestions = [] }: Props) {
-  const [query, setQuery] = useState('');
+export default function SearchBar({ onSearch, placeholder = 'Search candidates...', suggestions = [], initialValue = '' }: Props) {
+  const [query, setQuery] = useState(initialValue);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -21,6 +22,10 @@ export default function SearchBar({ onSearch, placeholder = 'Search candidates..
     const saved = localStorage.getItem(RECENT_KEY);
     if (saved) setRecentSearches(JSON.parse(saved));
   }, []);
+
+  useEffect(() => {
+    setQuery(initialValue);
+  }, [initialValue]);
 
   const handleSearch = (value: string) => {
     setQuery(value);
