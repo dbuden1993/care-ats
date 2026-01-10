@@ -11,7 +11,6 @@ const nextConfig: NextConfig = {
   ],
   webpack: (config, { isServer }) => {
     if (isServer) {
-      // Don't bundle these packages on the server
       config.externals = config.externals || [];
       config.externals.push({
         'whatsapp-web.js': 'commonjs whatsapp-web.js',
@@ -20,15 +19,6 @@ const nextConfig: NextConfig = {
       });
     }
     return config;
-  },
-  experimental: {
-    turbo: {
-      resolveAlias: {
-        'whatsapp-web.js': false,
-        'puppeteer': false,
-        'puppeteer-core': false,
-      }
-    }
   }
 };
 
