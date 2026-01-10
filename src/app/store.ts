@@ -1,5 +1,5 @@
 // Mock data store - replace with Supabase in production
-import type { Job, Pipeline, PipelineStage, EmailTemplate, AutomationRule, Interview, Note, Document } from './types';
+import type { Job, Pipeline, PipelineStage, EmailTemplate, Automation, Interview, Note, Document } from './types';
 
 // Default pipeline stages
 export const DEFAULT_STAGES: PipelineStage[] = [
@@ -203,7 +203,7 @@ See you soon!
 ];
 
 // Sample automation rules
-export const AUTOMATION_RULES: AutomationRule[] = [
+export const AUTOMATION_RULES: Automation[] = [
   {
     id: 'auto-1',
     name: 'Send confirmation on application',
