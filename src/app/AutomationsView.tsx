@@ -42,7 +42,7 @@ export default function AutomationsView() {
   
   const saveAutomation = () => {
     if (!newAutomation.name || !newAutomation.trigger_type) return;
-    setAutomations([...automations, { ...newAutomation, id: Date.now().toString(), enabled: true, runs: 0 }]);
+    setAutomations([...automations, { ...newAutomation, id: Date.now().toString(), enabled: true, runs: 0, trigger_config: {} }]);
     setNewAutomation({ name: '', trigger_type: '', actions: [] });
     setShowCreate(false);
   };
