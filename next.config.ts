@@ -9,16 +9,12 @@ const nextConfig: NextConfig = {
     'ws',
     'qrcode-terminal'
   ],
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      config.externals = config.externals || [];
-      config.externals.push({
-        'whatsapp-web.js': 'commonjs whatsapp-web.js',
-        'puppeteer': 'commonjs puppeteer',
-        'puppeteer-core': 'commonjs puppeteer-core',
-      });
+  turbopack: {
+    resolveAlias: {
+      'whatsapp-web.js': '',
+      'puppeteer': '',
+      'puppeteer-core': '',
     }
-    return config;
   }
 };
 
