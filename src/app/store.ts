@@ -33,9 +33,7 @@ export const SAMPLE_JOBS: Job[] = [
     salary_type: 'hourly',
     created_at: '2024-01-15T10:00:00Z',
     published_at: '2024-01-16T09:00:00Z',
-    closed_at: null,
     hiring_manager_id: 'user-1',
-    pipeline_id: 'default',
     candidates_count: 24,
   },
   {
@@ -52,9 +50,7 @@ export const SAMPLE_JOBS: Job[] = [
     salary_type: 'hourly',
     created_at: '2024-01-20T10:00:00Z',
     published_at: '2024-01-21T09:00:00Z',
-    closed_at: null,
     hiring_manager_id: 'user-1',
-    pipeline_id: 'default',
     candidates_count: 12,
   },
   {
@@ -71,9 +67,7 @@ export const SAMPLE_JOBS: Job[] = [
     salary_type: 'hourly',
     created_at: '2024-01-25T10:00:00Z',
     published_at: '2024-01-26T09:00:00Z',
-    closed_at: null,
     hiring_manager_id: 'user-2',
-    pipeline_id: 'default',
     candidates_count: 8,
   },
 ];
