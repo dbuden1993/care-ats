@@ -175,7 +175,7 @@ export default function StatsDashboard({ candidates, jobs, period = 30 }: Props)
         <div className="chart-card">
           <div className="chart-title">Source Breakdown</div>
           <div className="source-list">
-            {Object.entries(metrics.bySource)
+            {(Object.entries(metrics.bySource) as [string, number][])
               .sort((a, b) => b[1] - a[1])
               .slice(0, 6)
               .map(([source, count], i) => {
