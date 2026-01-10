@@ -154,7 +154,7 @@ export default function StatsDashboard({ candidates, jobs, period = 30 }: Props)
               { stage: 'Offer', count: metrics.byStatus['offer'] || 0, color: '#10b981' },
               { stage: 'Hired', count: metrics.byStatus['hired'] || 0, color: '#059669' },
             ].map((row, i) => {
-              const maxCount = Math.max(...Object.values(metrics.byStatus), 1);
+              const maxCount = Math.max(...(Object.values(metrics.byStatus) as number[]), 1);
               const width = Math.max((row.count / maxCount) * 100, row.count > 0 ? 10 : 0);
               const pct = metrics.total > 0 ? Math.round((row.count / metrics.total) * 100) : 0;
               return (
