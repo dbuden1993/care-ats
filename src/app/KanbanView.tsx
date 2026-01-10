@@ -5,9 +5,16 @@ import Avatar from './Avatar';
 import StatusBadge from './StatusBadge';
 import Tooltip from './Tooltip';
 
+interface Stage {
+  id: string;
+  name?: string;
+  label?: string;
+  color?: string;
+}
+
 interface Props {
   candidates: any[];
-  stages: { id: string; label: string; color: string }[];
+  stages: Stage[];
   onUpdate: () => void;
   onCandidateClick?: (candidate: any) => void;
 }
@@ -15,6 +22,10 @@ interface Props {
 export default function KanbanView({ candidates, stages, onUpdate, onCandidateClick }: Props) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+
+  // Helper to get stage label (supports both 'label' and 'name')
+  const getStageLabel = (stage: Stage) => stage.label || stage.name || stage.id;
+  const getStageColor = (stage: Stage) => stage.color || '#6b7280';
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
     setDraggedId(id);
@@ -118,7 +129,7 @@ export default function KanbanView({ candidates, stages, onUpdate, onCandidateCl
 
       {stages.map(stage => {
         const stageCandidates = getStageCandidates(stage.id);
-        const colors = stageColors[stage.id] || { bg: '#f9fafb', border: '#e5e7eb', header: '#6b7280' };
+        const colors = stageColors[stage.id] || { bg: '#f9fafb', border: '#e5e7eb', header: getStageColor(stage) };
         const isDragOver = dragOverStage === stage.id;
         
         return (
@@ -133,7 +144,7 @@ export default function KanbanView({ candidates, stages, onUpdate, onCandidateCl
             <div className="kanban-header" style={{ borderBottomColor: colors.border }}>
               <div className="kanban-header-left">
                 <div className="kanban-dot" style={{ background: colors.header }} />
-                <span className="kanban-title">{stage.label}</span>
+                <span className="kanban-title">{getStageLabel(stage)}</span>
               </div>
               <span className="kanban-count">{getStageCount(stage.id)}</span>
             </div>
