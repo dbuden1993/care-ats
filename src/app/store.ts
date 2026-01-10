@@ -3,18 +3,17 @@ import type { Job, Pipeline, PipelineStage, EmailTemplate, Automation, Interview
 
 // Default pipeline stages
 export const DEFAULT_STAGES: PipelineStage[] = [
-  { id: 'new', pipeline_id: 'default', name: 'New', order: 0, color: '#6366f1', is_terminal: false },
-  { id: 'screening', pipeline_id: 'default', name: 'Screening', order: 1, color: '#8b5cf6', is_terminal: false },
-  { id: 'interview', pipeline_id: 'default', name: 'Interview', order: 2, color: '#f59e0b', is_terminal: false },
-  { id: 'offer', pipeline_id: 'default', name: 'Offer', order: 3, color: '#10b981', is_terminal: false },
-  { id: 'hired', pipeline_id: 'default', name: 'Hired', order: 4, color: '#059669', is_terminal: true },
-  { id: 'rejected', pipeline_id: 'default', name: 'Rejected', order: 5, color: '#ef4444', is_terminal: true },
+  { id: 'new', name: 'New', order: 0, color: '#6366f1', is_terminal: false },
+  { id: 'screening', name: 'Screening', order: 1, color: '#8b5cf6', is_terminal: false },
+  { id: 'interview', name: 'Interview', order: 2, color: '#f59e0b', is_terminal: false },
+  { id: 'offer', name: 'Offer', order: 3, color: '#10b981', is_terminal: false },
+  { id: 'hired', name: 'Hired', order: 4, color: '#059669', is_terminal: true },
+  { id: 'rejected', name: 'Rejected', order: 5, color: '#ef4444', is_terminal: true },
 ];
 
 export const DEFAULT_PIPELINE: Pipeline = {
   id: 'default',
   name: 'Standard Hiring',
-  is_default: true,
   stages: DEFAULT_STAGES,
 };
 
