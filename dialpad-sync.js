@@ -206,6 +206,12 @@ async function fetchRecordingUrl(callId) {
         console.log(`   ✅ Created share link`);
         return shareLink;
       }
+      
+      // Fallback: return the direct URL from recording_details
+      if (recording.url) {
+        console.log(`   ⚠️ Share link failed, trying direct URL`);
+        return recording.url;
+      }
     }
     
     // Method 2: Try with call_recording_ids if available
@@ -220,19 +226,11 @@ async function fetchRecordingUrl(callId) {
       }
     }
     
-    // Method 3: Try the direct URL with proper auth (fallback)
+    // Method 3: Return the admin_recording_urls directly as fallback
     if (callDetails.admin_recording_urls?.length > 0) {
       const url = callDetails.admin_recording_urls[0];
-      // Extract the recording ID from the URL
-      const match = url.match(/adminrecording\/(\d+)/);
-      if (match) {
-        console.log(`   📼 Extracted recording ID from URL: ${match[1]}`);
-        const shareLink = await createRecordingShareLink(match[1], 'admincallrecording');
-        if (shareLink) {
-          console.log(`   ✅ Created share link from URL`);
-          return shareLink;
-        }
-      }
+      console.log(`   ⚠️ Returning direct admin recording URL (auth may be required)`);
+      return url;
     }
     
     console.log(`   ❌ No recording found for this call`);
@@ -249,41 +247,57 @@ async function downloadAudio(url) {
   try {
     console.log('   📥 Downloading recording...');
     
-    // Add authorization header for Dialpad URLs
-    const headers = {};
-    if (url.includes('dialpad.com')) {
-      headers['Authorization'] = `Bearer ${DIALPAD_API_KEY}`;
+    // Try multiple auth methods for Dialpad URLs
+    const authMethods = [
+      // Method 1: Bearer token header
+      { headers: { 'Authorization': `Bearer ${DIALPAD_API_KEY}` } },
+      // Method 2: API key in query param
+      { url: `${url}${url.includes('?') ? '&' : '?'}apikey=${DIALPAD_API_KEY}` },
+      // Method 3: Basic auth
+      { headers: { 'Authorization': `Basic ${Buffer.from(DIALPAD_API_KEY + ':').toString('base64')}` } },
+      // Method 4: No auth (public link)
+      {}
+    ];
+    
+    for (let i = 0; i < authMethods.length; i++) {
+      const method = authMethods[i];
+      const fetchUrl = method.url || url;
+      const headers = method.headers || {};
+      
+      try {
+        const response = await fetch(fetchUrl, { headers });
+        
+        if (!response.ok) continue;
+        
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const contentType = response.headers.get('content-type') || 'audio/mpeg';
+        
+        // Check if it's actually audio (not an HTML error page)
+        const firstBytes = buffer.slice(0, 20).toString('utf8');
+        if (firstBytes.includes('<!DOCTYPE') || firstBytes.includes('<html') || firstBytes.includes('<!doctype')) {
+          continue; // Try next method
+        }
+        
+        // Check if it looks like MP3 (ID3 header or MPEG sync)
+        if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) {
+          // ID3 tag - valid MP3
+        } else if (buffer[0] === 0xFF && (buffer[1] & 0xE0) === 0xE0) {
+          // MPEG sync - valid MP3
+        } else if (arrayBuffer.byteLength < 10000) {
+          // Too small and no valid header
+          continue;
+        }
+        
+        console.log(`   ✅ Downloaded (${Math.round(arrayBuffer.byteLength / 1024)} KB, type: ${contentType}) [method ${i+1}]`);
+        return { base64: buffer.toString('base64'), mediaType: contentType };
+      } catch (e) {
+        continue;
+      }
     }
     
-    const response = await fetch(url, { headers });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to download: ${response.status}`);
-    }
-    
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const base64 = buffer.toString('base64');
-    
-    // Determine media type from URL or response
-    const contentType = response.headers.get('content-type') || 'audio/mpeg';
-    
-    console.log(`   ✅ Downloaded (${Math.round(arrayBuffer.byteLength / 1024)} KB, type: ${contentType})`);
-    
-    // Check if it's actually audio (not an HTML error page)
-    const firstBytes = buffer.slice(0, 20).toString('utf8');
-    if (firstBytes.includes('<!DOCTYPE') || firstBytes.includes('<html') || firstBytes.includes('<!doctype')) {
-      console.log('   ❌ Downloaded file is HTML, not audio (auth may have failed)');
-      console.log('   First bytes:', firstBytes.slice(0, 50));
-      return null;
-    }
-    
-    // Check minimum size (real audio should be > 50KB usually)
-    if (arrayBuffer.byteLength < 5000) {
-      console.log(`   ⚠️ File very small (${arrayBuffer.byteLength} bytes), may not be valid audio`);
-    }
-    
-    return { base64, mediaType: contentType };
+    console.log('   ❌ Could not download audio with any auth method');
+    return null;
   } catch (err) {
     console.error('   ❌ Error downloading audio:', err.message);
     return null;
