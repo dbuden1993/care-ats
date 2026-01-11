@@ -3,29 +3,36 @@
 // Run with: node dialpad-sync.js
 
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 require('dotenv').config({ path: path.join(__dirname, '.env.local') });
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
+const OpenAI = require('openai');
 
 // ============ CONFIGURATION ============
 const DIALPAD_API_KEY = process.env.DIALPAD_API_KEY;
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 // Validate config
 if (!DIALPAD_API_KEY) throw new Error('Missing DIALPAD_API_KEY in .env.local');
 if (!CLAUDE_API_KEY) throw new Error('Missing CLAUDE_API_KEY in .env.local');
+if (!OPENAI_API_KEY) throw new Error('Missing OPENAI_API_KEY in .env.local');
 if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error('Missing Supabase config in .env.local');
 
 // Initialize clients
 const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 console.log('🔧 Configuration loaded');
 console.log('   Dialpad API:', DIALPAD_API_KEY ? '✅' : '❌');
 console.log('   Claude API:', CLAUDE_API_KEY ? '✅' : '❌');
+console.log('   OpenAI API:', OPENAI_API_KEY ? '✅' : '❌');
 console.log('   Supabase:', SUPABASE_URL ? '✅' : '❌');
 
 // ============ DIALPAD API ============
@@ -231,39 +238,31 @@ async function downloadAudio(url) {
 async function transcribeWithWhisper(audioBase64, mediaType) {
   console.log('   🎤 Transcribing with Whisper...');
   
-  // Convert base64 to buffer
+  // Convert base64 to buffer and save to temp file
   const audioBuffer = Buffer.from(audioBase64, 'base64');
-  
-  // Create form data with the audio file
-  const FormData = (await import('form-data')).default;
-  const form = new FormData();
-  
-  // Determine file extension from media type
   const ext = mediaType.includes('mp3') ? 'mp3' : mediaType.includes('wav') ? 'wav' : 'mp3';
-  form.append('file', audioBuffer, { filename: `audio.${ext}`, contentType: mediaType });
-  form.append('model', 'whisper-1');
-  form.append('language', 'en');
-  form.append('response_format', 'verbose_json');
+  const tempFile = path.join(os.tmpdir(), `dialpad_audio_${Date.now()}.${ext}`);
   
   try {
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        ...form.getHeaders()
-      },
-      body: form
+    // Write to temp file
+    fs.writeFileSync(tempFile, audioBuffer);
+    
+    // Use OpenAI SDK
+    const transcription = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempFile),
+      model: 'whisper-1',
+      language: 'en',
+      response_format: 'text'
     });
     
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Whisper API error ${response.status}: ${err}`);
-    }
+    // Clean up temp file
+    fs.unlinkSync(tempFile);
     
-    const result = await response.json();
-    console.log(`   ✅ Transcribed (${result.text?.length || 0} chars)`);
-    return result.text;
+    console.log(`   ✅ Transcribed (${transcription?.length || 0} chars)`);
+    return transcription;
   } catch (err) {
+    // Clean up temp file on error
+    try { fs.unlinkSync(tempFile); } catch (e) {}
     console.error('   ❌ Whisper transcription failed:', err.message);
     return null;
   }
@@ -611,30 +610,8 @@ async function saveCall(call, transcript, analysis, candidateId) {
   const callTime = parseDialpadDate(call.date_started) || parseDialpadDate(call.started_at);
   const callId = (call.call_id || call.id)?.toString();
   
-  // Save to calls table
-  const callRecord = {
-    call_id: callId,
-    candidate_id: candidateId,
-    candidate_phone_e164: call.external_number,
-    call_time: callTime,
-    direction: call.direction,
-    duration_ms: call.duration ? Math.round(call.duration) : null,
-    transcript: transcript,
-    ai_recap: typeof analysis.call_summary === 'string' ? analysis.call_summary : JSON.stringify(analysis.call_summary),
-    energy_score: analysis.energy_score,
-    extracted_json: analysis,
-    org_id: '00000000-0000-0000-0000-000000000000' // Default org ID
-  };
-  
-  const { error: callError } = await supabase
-    .from('calls')
-    .insert([callRecord]);
-  
-  if (callError) {
-    console.error('   ❌ Error saving to calls:', callError.message);
-  } else {
-    console.log('   💾 Saved to calls table');
-  }
+  // Skip the 'calls' table - it has foreign key constraints we can't satisfy
+  // The call_history table has all the data we need
   
   // Save to call_history table (full history, never overwrites)
   const historyRecord = {
@@ -643,10 +620,10 @@ async function saveCall(call, transcript, analysis, candidateId) {
     call_id: callId,
     call_time: callTime,
     direction: call.direction,
-    duration_ms: call.duration ? Math.round(call.duration * 1000) : null,
+    duration_ms: call.duration ? Math.round(call.duration) : null,
     candidate_name: analysis.candidate_name,
     experience_summary: analysis.experience_summary,
-    call_summary: analysis.call_summary,
+    call_summary: typeof analysis.call_summary === 'string' ? analysis.call_summary : JSON.stringify(analysis.call_summary),
     roles: analysis.roles,
     driver: analysis.driver,
     dbs_status: analysis.dbs_status,
