@@ -1,34 +1,22 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { updateSession } from "@/lib/supabase/proxy";
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 
-export async function middleware(request: NextRequest) {
-  const { supabase, response } = await updateSession(request);
-
-  const { data } = await supabase.auth.getClaims();
-  const isAuthed = !!data?.claims;
-
-  const path = request.nextUrl.pathname;
-  const isLogin = path.startsWith("/login");
-
-  if (!isAuthed && !isLogin) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("redirect", path + (request.nextUrl.search || ""));
-    return NextResponse.redirect(url);
-  }
-
-  if (isAuthed && isLogin) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    url.search = "";
-    return NextResponse.redirect(url);
-  }
-
-  return response;
+export function middleware(request: NextRequest) {
+  // Allow all requests to pass through for now
+  // Add authentication check here later if needed
+  return NextResponse.next();
 }
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    /*
+     * Match all request paths except:
+     * - api (API routes)
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - public files
+     */
+    '/((?!api|_next/static|_next/image|favicon.ico|.*\\..*$).*)',
   ],
 };
