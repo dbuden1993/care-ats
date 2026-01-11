@@ -89,7 +89,7 @@ Best regards,
 {{company_name}}`,
     category: 'application',
     variables: ['candidate_name', 'job_title', 'company_name', 'sender_name'],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
   {
     id: 'tpl-2',
@@ -109,7 +109,7 @@ Best regards,
 {{sender_name}}`,
     category: 'interview',
     variables: ['candidate_name', 'job_title', 'interview_date', 'interview_time', 'interview_location', 'sender_name'],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
   {
     id: 'tpl-3',
@@ -127,7 +127,7 @@ Best regards,
 {{sender_name}}`,
     category: 'rejection',
     variables: ['candidate_name', 'job_title', 'company_name', 'sender_name'],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
   {
     id: 'tpl-4',
@@ -149,7 +149,7 @@ Best regards,
 {{sender_name}}`,
     category: 'offer',
     variables: ['candidate_name', 'job_title', 'company_name', 'salary', 'start_date', 'employment_type', 'sender_name'],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
   {
     id: 'tpl-5',
@@ -170,7 +170,7 @@ Best regards,
 {{sender_name}}`,
     category: 'general',
     variables: ['candidate_name', 'job_title', 'sender_name'],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
   {
     id: 'tpl-6',
@@ -191,7 +191,7 @@ See you soon!
 {{sender_name}}`,
     category: 'interview',
     variables: ['candidate_name', 'job_title', 'interview_date', 'interview_time', 'interview_location', 'sender_name'],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
 ];
 
@@ -204,7 +204,7 @@ export const AUTOMATION_RULES: Automation[] = [
     trigger: { type: 'new_application', config: {} },
     conditions: [],
     actions: [{ type: 'send_email', config: { template_id: 'tpl-1' } }],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
   {
     id: 'auto-2',
@@ -213,7 +213,7 @@ export const AUTOMATION_RULES: Automation[] = [
     trigger: { type: 'stage_change', config: { to_stage: 'interview' } },
     conditions: [],
     actions: [{ type: 'notify_team', config: { message: 'Candidate moved to interview stage' } }],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
   {
     id: 'auto-3',
@@ -225,7 +225,7 @@ export const AUTOMATION_RULES: Automation[] = [
       { type: 'send_email', config: { template_id: 'tpl-3' } },
       { type: 'move_stage', config: { to_stage: 'rejected' } },
     ],
-    created_at: '2024-01-01T00:00:00Z',
+
   },
 ];
 
