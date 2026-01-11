@@ -171,7 +171,8 @@ async function createRecordingShareLink(recordingId, recordingType = 'adminrecor
       body.call_recording_id = recordingId;
     }
     
-    const result = await dialpadRequest('/recordingsharelink', 'POST', body);
+    // dialpadRequest signature: (endpoint, params, method, body)
+    const result = await dialpadRequest('/recordingsharelink', {}, 'POST', body);
     
     if (result?.link) {
       return result.link;
