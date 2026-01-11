@@ -145,12 +145,6 @@ async function fetchAllCalls() {
 async function fetchCallDetails(callId) {
   try {
     const call = await dialpadRequest(`/call/${callId}`);
-    // Debug: show what fields are available
-    console.log(`   📋 Call details available fields:`, Object.keys(call).join(', '));
-    if (call.recording_url) console.log(`   🎙️ Has recording_url:`, call.recording_url);
-    if (call.recording) console.log(`   🎙️ Has recording:`, call.recording);
-    if (call.transcript) console.log(`   📝 Has transcript`);
-    if (call.voicemail_link) console.log(`   📞 Has voicemail_link`);
     return call;
   } catch (err) {
     console.error(`   ❌ Error fetching call ${callId}:`, err.message);
@@ -162,71 +156,56 @@ async function fetchCallDetails(callId) {
 async function fetchRecordingUrl(callId) {
   console.log(`   🔍 Looking for recording...`);
   
-  // Method 1: Get call details
   try {
     const callDetails = await fetchCallDetails(callId);
     
-    if (callDetails?.recording_url) {
-      const url = Array.isArray(callDetails.recording_url) ? callDetails.recording_url[0] : callDetails.recording_url;
-      console.log(`   ✅ Found recording_url in call details`);
+    if (!callDetails) {
+      console.log(`   ❌ Could not fetch call details`);
+      return null;
+    }
+    
+    // Method 1: Check admin_recording_urls (most common)
+    if (callDetails.admin_recording_urls?.length > 0) {
+      const url = callDetails.admin_recording_urls[0];
+      console.log(`   ✅ Found admin_recording_url:`, url);
       return url;
     }
     
-    if (callDetails?.call_recording_ids?.length > 0) {
-      console.log(`   📼 Found recording IDs:`, callDetails.call_recording_ids);
-      // Try to create a share link for the recording
-      try {
-        const shareLink = await dialpadRequest('/recordingsharelink', {}, 'POST', {
-          call_id: callId
-        });
-        if (shareLink?.url) {
-          console.log(`   ✅ Created recording share link`);
-          return shareLink.url;
-        }
-      } catch (e) {
-        console.log(`   ⚠️ Could not create share link:`, e.message);
-      }
+    // Method 2: Check recording_details array
+    if (callDetails.recording_details?.length > 0) {
+      const url = callDetails.recording_details[0].url;
+      console.log(`   ✅ Found recording in recording_details:`, url);
+      return url;
     }
+    
+    // Method 3: Check recording_url field
+    if (callDetails.recording_url) {
+      const url = Array.isArray(callDetails.recording_url) ? callDetails.recording_url[0] : callDetails.recording_url;
+      console.log(`   ✅ Found recording_url:`, url);
+      return url;
+    }
+    
+    console.log(`   ❌ No recording found for this call`);
+    return null;
+    
   } catch (err) {
-    console.log(`   ⚠️ Call details error:`, err.message);
+    console.log(`   ⚠️ Error getting recording:`, err.message);
+    return null;
   }
-  
-  // Method 2: Try transcript endpoint (might have recording info)
-  try {
-    const transcript = await dialpadRequest(`/transcripts/${callId}`);
-    if (transcript?.recording_url) {
-      console.log(`   ✅ Found recording_url in transcript`);
-      return transcript.recording_url;
-    }
-  } catch (e) {
-    // No transcript
-  }
-  
-  // Method 3: Try AI recap endpoint
-  try {
-    const recap = await dialpadRequest(`/call/${callId}/ai_recap`);
-    if (recap?.recording_url) {
-      console.log(`   ✅ Found recording_url in AI recap`);
-      return recap.recording_url;
-    }
-    // If we have AI recap, we can use that instead of recording
-    if (recap?.summary || recap?.recap) {
-      console.log(`   📝 Found AI recap (no recording URL)`);
-      return { type: 'recap', data: recap };
-    }
-  } catch (e) {
-    // No AI recap
-  }
-  
-  console.log(`   ❌ No recording found via any method`);
-  return null;
 }
 
 // Download audio file and convert to base64
 async function downloadAudio(url) {
   try {
     console.log('   📥 Downloading recording...');
-    const response = await fetch(url);
+    
+    // Add authorization header for Dialpad URLs
+    const headers = {};
+    if (url.includes('dialpad.com')) {
+      headers['Authorization'] = `Bearer ${DIALPAD_API_KEY}`;
+    }
+    
+    const response = await fetch(url, { headers });
     
     if (!response.ok) {
       throw new Error(`Failed to download: ${response.status}`);
@@ -236,7 +215,7 @@ async function downloadAudio(url) {
     const base64 = Buffer.from(arrayBuffer).toString('base64');
     
     // Determine media type from URL or response
-    const contentType = response.headers.get('content-type') || 'audio/mp3';
+    const contentType = response.headers.get('content-type') || 'audio/mpeg';
     
     console.log(`   ✅ Downloaded (${Math.round(arrayBuffer.byteLength / 1024)} KB)`);
     return { base64, mediaType: contentType };
@@ -246,17 +225,72 @@ async function downloadAudio(url) {
   }
 }
 
-// ============ AI ANALYSIS WITH AUDIO ============
-async function analyzeRecording(audioBase64, mediaType, phone, direction) {
-  console.log('   🤖 Analyzing recording with Claude AI...');
+// ============ AI ANALYSIS WITH AUDIO (via Whisper + Claude) ============
+
+// Transcribe audio using OpenAI Whisper API
+async function transcribeWithWhisper(audioBase64, mediaType) {
+  console.log('   🎤 Transcribing with Whisper...');
   
-  const prompt = `You are an AI assistant analyzing a recruitment phone call recording for a healthcare staffing agency.
+  // Convert base64 to buffer
+  const audioBuffer = Buffer.from(audioBase64, 'base64');
+  
+  // Create form data with the audio file
+  const FormData = (await import('form-data')).default;
+  const form = new FormData();
+  
+  // Determine file extension from media type
+  const ext = mediaType.includes('mp3') ? 'mp3' : mediaType.includes('wav') ? 'wav' : 'mp3';
+  form.append('file', audioBuffer, { filename: `audio.${ext}`, contentType: mediaType });
+  form.append('model', 'whisper-1');
+  form.append('language', 'en');
+  form.append('response_format', 'verbose_json');
+  
+  try {
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        ...form.getHeaders()
+      },
+      body: form
+    });
+    
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Whisper API error ${response.status}: ${err}`);
+    }
+    
+    const result = await response.json();
+    console.log(`   ✅ Transcribed (${result.text?.length || 0} chars)`);
+    return result.text;
+  } catch (err) {
+    console.error('   ❌ Whisper transcription failed:', err.message);
+    return null;
+  }
+}
+
+async function analyzeRecording(audioBase64, mediaType, phone, direction) {
+  console.log('   🤖 Analyzing recording with Whisper + Claude...');
+  
+  // Step 1: Transcribe with Whisper (much better than Dialpad's transcript)
+  const whisperTranscript = await transcribeWithWhisper(audioBase64, mediaType);
+  
+  if (!whisperTranscript) {
+    console.log('   ❌ Could not transcribe audio');
+    return null;
+  }
+  
+  // Step 2: Analyze transcript with Claude
+  const prompt = `You are an AI assistant analyzing a recruitment phone call transcript for a healthcare staffing agency.
 
 CALL METADATA:
 - Phone: ${phone}
 - Direction: ${direction}
 
-Listen to this call recording and extract the following information. Be accurate - only extract information that is explicitly stated. If something is not discussed, say "Not discussed".
+TRANSCRIPT (from audio recording):
+${whisperTranscript}
+
+Analyze this call and extract the following information. Be accurate - only extract information that is explicitly stated. If something is not discussed, say "Not discussed" or "Unknown".
 
 Respond in JSON format only:
 
@@ -275,7 +309,7 @@ Respond in JSON format only:
   "weekly_rota": "availability details or null",
   "follow_up_questions": ["4-5 suggested follow-up questions based on gaps in information"],
   "extraction_confidence": 0-100,
-  "transcript": "Full transcript of the conversation as you heard it"
+  "transcript": "The full transcript as provided"
 }`;
 
   try {
@@ -285,35 +319,25 @@ Respond in JSON format only:
       messages: [
         {
           role: 'user',
-          content: [
-            {
-              type: 'audio',
-              source: {
-                type: 'base64',
-                media_type: mediaType,
-                data: audioBase64
-              }
-            },
-            {
-              type: 'text',
-              text: prompt
-            }
-          ]
+          content: prompt
         }
       ]
     });
-
-    const text = response.content[0].text;
     
-    // Extract JSON from response
+    const text = response.content[0]?.text || '';
+    
+    // Parse JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+      const analysis = JSON.parse(jsonMatch[0]);
+      // Include the Whisper transcript
+      analysis.transcript = whisperTranscript;
       console.log('   ✅ Analysis complete');
-      return parsed;
+      return analysis;
+    } else {
+      console.log('   ❌ Could not parse AI response as JSON');
+      return null;
     }
-    
-    throw new Error('No JSON found in response');
   } catch (err) {
     console.error('   ❌ AI analysis failed:', err.message);
     return null;
@@ -594,11 +618,12 @@ async function saveCall(call, transcript, analysis, candidateId) {
     candidate_phone_e164: call.external_number,
     call_time: callTime,
     direction: call.direction,
-    duration_ms: call.duration ? Math.round(call.duration * 1000) : null,
+    duration_ms: call.duration ? Math.round(call.duration) : null,
     transcript: transcript,
-    ai_recap: analysis.call_summary,
+    ai_recap: typeof analysis.call_summary === 'string' ? analysis.call_summary : JSON.stringify(analysis.call_summary),
     energy_score: analysis.energy_score,
-    extracted_json: analysis
+    extracted_json: analysis,
+    org_id: '00000000-0000-0000-0000-000000000000' // Default org ID
   };
   
   const { error: callError } = await supabase

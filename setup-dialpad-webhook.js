@@ -3,6 +3,7 @@
 
 const DIALPAD_API_KEY = '8rrNCfzyn4SkW65uKNZSLQrDRGPp9bhCXUQQ6gYXP8qUYt4MCjLYyXy9BmBtZTSqnHzLj6dmXXwNvfkADtSgD4Vhvq3Eqj9ZU5er';
 const WEBHOOK_URL = 'https://care-ats.vercel.app/api/dialpad';
+const WEBHOOK_ID = '5151028032053248'; // Already created
 
 async function dialpadRequest(endpoint, method = 'GET', body = null) {
   const url = `https://dialpad.com/api/v2${endpoint}`;
@@ -38,51 +39,54 @@ async function dialpadRequest(endpoint, method = 'GET', body = null) {
 }
 
 async function setup() {
-  console.log('🔧 Setting up Dialpad webhook...\n');
+  console.log('🔧 Setting up Dialpad call subscription...\n');
   
-  // Step 1: List existing webhooks
-  console.log('📋 Checking existing webhooks...');
-  const existingWebhooks = await dialpadRequest('/webhooks');
-  console.log('Existing webhooks:', JSON.stringify(existingWebhooks, null, 2));
+  // First get user info to find target IDs
+  console.log('👤 Getting user info...');
+  const me = await dialpadRequest('/users/me');
+  console.log('User info:', JSON.stringify(me, null, 2));
   
-  // Step 2: Create a new webhook
-  console.log('\n🆕 Creating webhook...');
-  const webhook = await dialpadRequest('/webhooks', 'POST', {
-    hook_url: WEBHOOK_URL,
-    // secret: 'your-secret-here', // Optional: for JWT signing
-  });
-  
-  if (!webhook || !webhook.id) {
-    console.error('❌ Failed to create webhook');
-    return;
-  }
-  
-  console.log('✅ Webhook created:', webhook);
-  const webhookId = webhook.id;
-  
-  // Step 3: Create call event subscription
+  // Create call event subscription with required call_states
+  // States: ringing, calling, connected, hangup, voicemail, recording, transcription, recap_summary, call_transcription
   console.log('\n📞 Creating call event subscription...');
-  const subscription = await dialpadRequest('/subscriptions/call', 'POST', {
-    webhook_id: webhookId,
-    // Subscribe to company-wide events
-    // You can also target specific users/offices/call_centers
-  });
   
-  if (subscription) {
-    console.log('✅ Call subscription created:', subscription);
-  } else {
-    console.log('⚠️ Could not create call subscription - may need company admin access');
+  // Try company-wide subscription first
+  if (me?.company_id) {
+    console.log('Trying company-wide subscription...');
+    const sub1 = await dialpadRequest('/subscriptions/call', 'POST', {
+      webhook_id: WEBHOOK_ID,
+      call_states: ['recording', 'hangup'],
+      target_id: me.company_id.toString(),
+      target_type: 'company'
+    });
+    
+    if (sub1) {
+      console.log('✅ Company subscription created:', JSON.stringify(sub1, null, 2));
+    }
   }
   
-  // Step 4: Verify setup
-  console.log('\n🔍 Verifying setup...');
-  const allWebhooks = await dialpadRequest('/webhooks');
-  console.log('All webhooks:', JSON.stringify(allWebhooks, null, 2));
+  // Also try user-level subscription as fallback
+  if (me?.id) {
+    console.log('\n📱 Creating user-level subscription...');
+    const sub2 = await dialpadRequest('/subscriptions/call', 'POST', {
+      webhook_id: WEBHOOK_ID,
+      call_states: ['recording', 'hangup'],
+      target_id: me.id.toString(),
+      target_type: 'user'
+    });
+    
+    if (sub2) {
+      console.log('✅ User subscription created:', JSON.stringify(sub2, null, 2));
+    }
+  }
+  
+  // List all subscriptions
+  console.log('\n📋 Listing all subscriptions...');
+  const subs = await dialpadRequest('/subscriptions');
+  console.log('Subscriptions:', JSON.stringify(subs, null, 2));
   
   console.log('\n✅ Setup complete!');
-  console.log(`Webhook URL: ${WEBHOOK_URL}`);
-  console.log(`Webhook ID: ${webhookId}`);
-  console.log('\nNow make a test call in Dialpad to verify it works!');
+  console.log('Make a test call in Dialpad and wait for it to end to verify it works!');
 }
 
 setup().catch(console.error);
