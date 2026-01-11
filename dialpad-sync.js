@@ -219,12 +219,27 @@ async function downloadAudio(url) {
     }
     
     const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    const buffer = Buffer.from(arrayBuffer);
+    const base64 = buffer.toString('base64');
     
     // Determine media type from URL or response
     const contentType = response.headers.get('content-type') || 'audio/mpeg';
     
-    console.log(`   ✅ Downloaded (${Math.round(arrayBuffer.byteLength / 1024)} KB)`);
+    console.log(`   ✅ Downloaded (${Math.round(arrayBuffer.byteLength / 1024)} KB, type: ${contentType})`);
+    
+    // Check if it's actually audio (not an HTML error page)
+    const firstBytes = buffer.slice(0, 20).toString('utf8');
+    if (firstBytes.includes('<!DOCTYPE') || firstBytes.includes('<html') || firstBytes.includes('<!doctype')) {
+      console.log('   ❌ Downloaded file is HTML, not audio (auth may have failed)');
+      console.log('   First bytes:', firstBytes.slice(0, 50));
+      return null;
+    }
+    
+    // Check minimum size (real audio should be > 50KB usually)
+    if (arrayBuffer.byteLength < 5000) {
+      console.log(`   ⚠️ File very small (${arrayBuffer.byteLength} bytes), may not be valid audio`);
+    }
+    
     return { base64, mediaType: contentType };
   } catch (err) {
     console.error('   ❌ Error downloading audio:', err.message);
