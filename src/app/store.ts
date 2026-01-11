@@ -200,32 +200,32 @@ export const AUTOMATION_RULES: Automation[] = [
   {
     id: 'auto-1',
     name: 'Send confirmation on application',
-    is_active: true,
-    trigger: { type: 'new_application', config: {} },
-    conditions: [],
+    enabled: true,
+    trigger_type: 'new_application',
+    trigger_config: {},
     actions: [{ type: 'send_email', config: { template_id: 'tpl-1' } }],
-
+    runs: 156,
   },
   {
     id: 'auto-2',
     name: 'Notify team on interview stage',
-    is_active: true,
-    trigger: { type: 'stage_change', config: { to_stage: 'interview' } },
-    conditions: [],
+    enabled: true,
+    trigger_type: 'stage_change',
+    trigger_config: { to_stage: 'interview' },
     actions: [{ type: 'notify_team', config: { message: 'Candidate moved to interview stage' } }],
-
+    runs: 42,
   },
   {
     id: 'auto-3',
     name: 'Auto-reject after 14 days in screening',
-    is_active: false,
-    trigger: { type: 'time_in_stage', config: { stage: 'screening', days: 14 } },
-    conditions: [],
+    enabled: false,
+    trigger_type: 'time_in_stage',
+    trigger_config: { stage: 'screening', days: 14 },
     actions: [
       { type: 'send_email', config: { template_id: 'tpl-3' } },
       { type: 'move_stage', config: { to_stage: 'rejected' } },
     ],
-
+    runs: 0,
   },
 ];
 
