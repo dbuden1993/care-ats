@@ -159,6 +159,30 @@ async function fetchCallDetails(callId) {
   }
 }
 
+// Create a shareable recording link via Dialpad API
+async function createRecordingShareLink(recordingId, recordingType = 'adminrecording') {
+  try {
+    const body = {};
+    
+    // Different params based on recording type
+    if (recordingType === 'admincallrecording' || recordingType === 'adminrecording') {
+      body.admin_call_recording_id = recordingId;
+    } else {
+      body.call_recording_id = recordingId;
+    }
+    
+    const result = await dialpadRequest('/recordingsharelink', 'POST', body);
+    
+    if (result?.link) {
+      return result.link;
+    }
+    return null;
+  } catch (err) {
+    console.log(`   ⚠️ Could not create share link:`, err.message);
+    return null;
+  }
+}
+
 // Fetch recording URL for a call - try multiple methods
 async function fetchRecordingUrl(callId) {
   console.log(`   🔍 Looking for recording...`);
@@ -171,25 +195,43 @@ async function fetchRecordingUrl(callId) {
       return null;
     }
     
-    // Method 1: Check admin_recording_urls (most common)
+    // Method 1: Check recording_details array and create share link
+    if (callDetails.recording_details?.length > 0) {
+      const recording = callDetails.recording_details[0];
+      console.log(`   📼 Found recording ID: ${recording.id} (type: ${recording.recording_type})`);
+      
+      const shareLink = await createRecordingShareLink(recording.id, recording.recording_type);
+      if (shareLink) {
+        console.log(`   ✅ Created share link`);
+        return shareLink;
+      }
+    }
+    
+    // Method 2: Try with call_recording_ids if available
+    if (callDetails.call_recording_ids?.length > 0) {
+      const recId = callDetails.call_recording_ids[0];
+      console.log(`   📼 Found call_recording_id: ${recId}`);
+      
+      const shareLink = await createRecordingShareLink(recId, 'callrecording');
+      if (shareLink) {
+        console.log(`   ✅ Created share link from call_recording_id`);
+        return shareLink;
+      }
+    }
+    
+    // Method 3: Try the direct URL with proper auth (fallback)
     if (callDetails.admin_recording_urls?.length > 0) {
       const url = callDetails.admin_recording_urls[0];
-      console.log(`   ✅ Found admin_recording_url:`, url);
-      return url;
-    }
-    
-    // Method 2: Check recording_details array
-    if (callDetails.recording_details?.length > 0) {
-      const url = callDetails.recording_details[0].url;
-      console.log(`   ✅ Found recording in recording_details:`, url);
-      return url;
-    }
-    
-    // Method 3: Check recording_url field
-    if (callDetails.recording_url) {
-      const url = Array.isArray(callDetails.recording_url) ? callDetails.recording_url[0] : callDetails.recording_url;
-      console.log(`   ✅ Found recording_url:`, url);
-      return url;
+      // Extract the recording ID from the URL
+      const match = url.match(/adminrecording\/(\d+)/);
+      if (match) {
+        console.log(`   📼 Extracted recording ID from URL: ${match[1]}`);
+        const shareLink = await createRecordingShareLink(match[1], 'admincallrecording');
+        if (shareLink) {
+          console.log(`   ✅ Created share link from URL`);
+          return shareLink;
+        }
+      }
     }
     
     console.log(`   ❌ No recording found for this call`);
