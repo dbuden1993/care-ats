@@ -35,6 +35,7 @@ import UserMenu from './UserMenu';
 import CandidateDetailPanel from './CandidateDetailPanel';
 import CandidateImport from './CandidateImport';
 import ImportedCandidatesView from './ImportedCandidatesView';
+import CalledCandidatesView from './CalledCandidatesView';
 import FilterPresets from './FilterPresets';
 import Tooltip from './Tooltip';
 import { getJobs, createJob } from './db';
@@ -43,7 +44,7 @@ import type { Job, Pipeline, ViewMode, SidebarSection } from './types';
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
-type ExtendedSection = SidebarSection | 'whatsapp' | 'imported';
+type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history';
 
 function Dashboard() {
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -68,6 +69,7 @@ function Dashboard() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importedCount, setImportedCount] = useState(0);
+  const [callHistoryCount, setCallHistoryCount] = useState(0);
   
   const toast = useToast();
 
@@ -77,6 +79,7 @@ function Dashboard() {
     { key: 'k', description: 'Kanban view', action: () => { setSection('candidates'); setViewMode('kanban'); } },
     { key: 'l', description: 'List view', action: () => { setSection('candidates'); setViewMode('list'); } },
     { key: 'w', description: 'WhatsApp campaigns', action: () => setSection('whatsapp') },
+    { key: 'c', description: 'Call history', action: () => setSection('call-history') },
     { key: '?', shift: true, description: 'Show shortcuts', action: () => setShowShortcuts(true) },
     { key: 'Escape', description: 'Close / Clear', action: () => { setSelected(new Set()); setSelectedCandidate(null); setShowShortcuts(false); } },
   ];
@@ -89,10 +92,8 @@ function Dashboard() {
       if (query?.trim()) {
         const res = await fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: query.trim(), limit: 100 }) });
         const data = await res.json();
-        // Filter to only show called candidates
         setCandidates((data.candidates || []).filter((c: any) => c.last_called_at !== null));
       } else {
-        // Only fetch candidates that HAVE been called (have last_called_at)
         const { data } = await supabase
           .from('candidates')
           .select('*')
@@ -124,13 +125,39 @@ function Dashboard() {
     } catch (e) { console.error('Failed to count imported:', e); }
   }, []);
 
-  useEffect(() => { fetchCandidates(); fetchJobs(); fetchImportedCount(); }, [fetchCandidates, fetchJobs, fetchImportedCount]);
+  const fetchCallHistoryCount = useCallback(async () => {
+    try {
+      const { count } = await supabase
+        .from('call_history')
+        .select('id', { count: 'exact' });
+      setCallHistoryCount(count || 0);
+    } catch (e) { console.error('Failed to count call history:', e); }
+  }, []);
+
+  useEffect(() => { 
+    fetchCandidates(); 
+    fetchJobs(); 
+    fetchImportedCount(); 
+    fetchCallHistoryCount(); 
+  }, [fetchCandidates, fetchJobs, fetchImportedCount, fetchCallHistoryCount]);
 
   const handleSearch = (q: string) => { setSearchQuery(q); fetchCandidates(q); };
   
   const handleAddCandidate = async (data: any) => {
     try {
-      await supabase.from('candidates').insert([{ name: data.name, phone_e164: data.phone, status: 'new', roles: data.roles, experience_summary: data.experience, driver: data.driver, dbs_update_service: data.dbs, mandatory_training: data.training, earliest_start_date: data.start_date, job_id: data.job_id || null, source: data.source }]);
+      await supabase.from('candidates').insert([{ 
+        name: data.name, 
+        phone_e164: data.phone, 
+        status: 'new', 
+        roles: data.roles, 
+        experience_summary: data.experience, 
+        driver: data.driver, 
+        dbs_update_service: data.dbs, 
+        mandatory_training: data.training, 
+        earliest_start_date: data.start_date, 
+        job_id: data.job_id || null, 
+        source: data.source 
+      }]);
       toast.success('Candidate added successfully');
       fetchCandidates();
     } catch (err) { toast.error('Failed to add candidate'); }
@@ -139,7 +166,19 @@ function Dashboard() {
 
   const handleAddJob = async (data: any) => {
     try {
-      await createJob({ title: data.title, department: data.department, location: data.location, type: data.type, status: data.status, description: data.description, requirements: data.requirements, salary_min: data.salary_min ? parseFloat(data.salary_min) : null, salary_max: data.salary_max ? parseFloat(data.salary_max) : null, salary_type: data.salary_type, published_at: data.status === 'open' ? new Date().toISOString() : null });
+      await createJob({ 
+        title: data.title, 
+        department: data.department, 
+        location: data.location, 
+        type: data.type, 
+        status: data.status, 
+        description: data.description, 
+        requirements: data.requirements, 
+        salary_min: data.salary_min ? parseFloat(data.salary_min) : null, 
+        salary_max: data.salary_max ? parseFloat(data.salary_max) : null, 
+        salary_type: data.salary_type, 
+        published_at: data.status === 'open' ? new Date().toISOString() : null 
+      });
       toast.success('Job created successfully');
       fetchJobs();
     } catch (err) { toast.error('Failed to create job'); }
@@ -152,6 +191,7 @@ function Dashboard() {
     else if (action === 'candidate' && data) setSelectedCandidate(data);
     else if (action === 'candidates') { setSection('candidates'); if (data?.status) setStatusFilter(data.status); }
     else if (action === 'whatsapp') setSection('whatsapp');
+    else if (action === 'call-history') setSection('call-history');
     else setSection(action as ExtendedSection);
   };
 
@@ -173,24 +213,61 @@ function Dashboard() {
     return true;
   }).map(c => anonymizeCandidate(c, blindMode));
 
-  const stats = { total: candidates.length, new: candidates.filter(c => c.status === 'new').length, screening: candidates.filter(c => c.status === 'screening').length, interview: candidates.filter(c => c.status === 'interview').length, offer: candidates.filter(c => c.status === 'offer').length, hired: candidates.filter(c => c.status === 'hired').length };
+  const stats = { 
+    total: candidates.length, 
+    new: candidates.filter(c => c.status === 'new').length, 
+    screening: candidates.filter(c => c.status === 'screening').length, 
+    interview: candidates.filter(c => c.status === 'interview').length, 
+    offer: candidates.filter(c => c.status === 'offer').length, 
+    hired: candidates.filter(c => c.status === 'hired').length 
+  };
 
-  const clearFilters = () => { setStatusFilter('all'); setQualFilter('all'); setEnergyFilter('all'); setJobFilter('all'); setSearchQuery(''); fetchCandidates(); };
+  const clearFilters = () => { 
+    setStatusFilter('all'); 
+    setQualFilter('all'); 
+    setEnergyFilter('all'); 
+    setJobFilter('all'); 
+    setSearchQuery(''); 
+    fetchCandidates(); 
+  };
 
   const navItems = [
-    { section: 'RECRUITMENT', items: [{ id: 'dashboard', icon: '📊', label: 'Dashboard' }, { id: 'candidates', icon: '👥', label: 'Called Candidates', badge: stats.total }, { id: 'imported', icon: '📥', label: 'Imported Pool', badge: importedCount }, { id: 'jobs', icon: '💼', label: 'Jobs', badge: jobs.filter(j => j.status === 'open').length }, { id: 'interviews', icon: '📅', label: 'Interviews' }] },
-    { section: 'OUTREACH', items: [{ id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' }] },
-    { section: 'TALENT', items: [{ id: 'talent-pools', icon: '🎯', label: 'Talent Pools' }, { id: 'referrals', icon: '🤝', label: 'Referrals' }, { id: 'onboarding', icon: '🚀', label: 'Onboarding' }] },
-    { section: 'INSIGHTS', items: [{ id: 'reports', icon: '📈', label: 'Reports' }, { id: 'surveys', icon: '⭐', label: 'Candidate NPS' }] },
-    { section: 'SETTINGS', items: [{ id: 'templates', icon: '📝', label: 'Templates' }, { id: 'automations', icon: '⚡', label: 'Automations' }, { id: 'compliance', icon: '🔒', label: 'Compliance' }, { id: 'settings', icon: '⚙️', label: 'Settings' }] },
+    { section: 'RECRUITMENT', items: [
+      { id: 'dashboard', icon: '📊', label: 'Dashboard' }, 
+      { id: 'call-history', icon: '📞', label: 'Call History', badge: callHistoryCount },
+      { id: 'candidates', icon: '👥', label: 'Called Candidates', badge: stats.total }, 
+      { id: 'imported', icon: '📥', label: 'Imported Pool', badge: importedCount }, 
+      { id: 'jobs', icon: '💼', label: 'Jobs', badge: jobs.filter(j => j.status === 'open').length }, 
+      { id: 'interviews', icon: '📅', label: 'Interviews' }
+    ] },
+    { section: 'OUTREACH', items: [
+      { id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' }
+    ] },
+    { section: 'TALENT', items: [
+      { id: 'talent-pools', icon: '🎯', label: 'Talent Pools' }, 
+      { id: 'referrals', icon: '🤝', label: 'Referrals' }, 
+      { id: 'onboarding', icon: '🚀', label: 'Onboarding' }
+    ] },
+    { section: 'INSIGHTS', items: [
+      { id: 'reports', icon: '📈', label: 'Reports' }, 
+      { id: 'surveys', icon: '⭐', label: 'Candidate NPS' }
+    ] },
+    { section: 'SETTINGS', items: [
+      { id: 'templates', icon: '📝', label: 'Templates' }, 
+      { id: 'automations', icon: '⚡', label: 'Automations' }, 
+      { id: 'compliance', icon: '🔒', label: 'Compliance' }, 
+      { id: 'settings', icon: '⚙️', label: 'Settings' }
+    ] },
   ];
+
+  const sidebarWidth = sidebarCollapsed ? '72px' : '260px';
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc', fontFamily: "'Inter', -apple-system, sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
-        .sidebar{width:${sidebarCollapsed ? '72px' : '260px'};background:linear-gradient(180deg,#fff 0%,#fafbfc 100%);border-right:1px solid #e5e7eb;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;transition:width .2s cubic-bezier(.4,0,.2,1);z-index:100}
+        .sidebar{width:${sidebarWidth};background:linear-gradient(180deg,#fff 0%,#fafbfc 100%);border-right:1px solid #e5e7eb;display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;transition:width .2s cubic-bezier(.4,0,.2,1);z-index:100}
         .sidebar-header{padding:20px;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;gap:12px}
         .logo{width:36px;height:36px;background:linear-gradient(135deg,#6366f1 0%,#4f46e5 100%);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;flex-shrink:0;box-shadow:0 2px 8px rgba(99,102,241,.3)}
         .logo-text{font-size:17px;font-weight:800;background:linear-gradient(135deg,#4f46e5,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
@@ -200,13 +277,15 @@ function Dashboard() {
         .nav-item:hover{background:#f3f4f6;color:#111}
         .nav-item.active{background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:#4f46e5;font-weight:600}
         .nav-item.whatsapp.active{background:linear-gradient(135deg,#ecfdf5,#d1fae5);color:#059669}
+        .nav-item.call-history.active{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#d97706}
         .nav-icon{width:20px;text-align:center;font-size:15px}
         .nav-badge{background:#e5e7eb;color:#374151;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:auto}
         .nav-item.active .nav-badge{background:#c7d2fe;color:#4f46e5}
+        .nav-item.call-history.active .nav-badge{background:#fde68a;color:#d97706}
         .sidebar-footer{margin-top:auto;padding:16px;border-top:1px solid #f3f4f6}
         .collapse-btn{position:absolute;right:-14px;top:24px;width:28px;height:28px;background:#fff;border:1px solid #e5e7eb;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;color:#6b7280;box-shadow:0 2px 8px rgba(0,0,0,.08);transition:all .15s;z-index:10}
         .collapse-btn:hover{background:#f9fafb;transform:scale(1.05)}
-        .main{margin-left:${sidebarCollapsed ? '72px' : '260px'};flex:1;transition:margin-left .2s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;min-height:100vh}
+        .main{margin-left:${sidebarWidth};flex:1;transition:margin-left .2s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;min-height:100vh}
         .topbar{background:#fff;border-bottom:1px solid #e5e7eb;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;backdrop-filter:blur(8px);background:rgba(255,255,255,.9)}
         .topbar-left{display:flex;align-items:center;gap:20px}
         .page-title{font-size:20px;font-weight:700;color:#111}
@@ -235,23 +314,42 @@ function Dashboard() {
 
       {/* Sidebar */}
       <aside className="sidebar">
-        <button className="collapse-btn" onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>{sidebarCollapsed ? '→' : '←'}</button>
-        <div className="sidebar-header"><div className="logo">✦</div>{!sidebarCollapsed && <div className="logo-text">CareRecruit</div>}</div>
+        <button className="collapse-btn" onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>
+          {sidebarCollapsed ? '→' : '←'}
+        </button>
+        <div className="sidebar-header">
+          <div className="logo">✦</div>
+          {!sidebarCollapsed && <div className="logo-text">CareRecruit</div>}
+        </div>
         {navItems.map(group => (
           <nav key={group.section} className="nav-section">
             {!sidebarCollapsed && <div className="nav-label">{group.section}</div>}
             {group.items.map(item => (
               <Tooltip key={item.id} content={sidebarCollapsed ? item.label : ''} position="right">
-                <div className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${section === item.id ? 'active' : ''}`} onClick={() => setSection(item.id as ExtendedSection)}>
+                <div 
+                  className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${item.id === 'call-history' ? 'call-history' : ''} ${section === item.id ? 'active' : ''}`} 
+                  onClick={() => setSection(item.id as ExtendedSection)}
+                >
                   <span className="nav-icon">{item.icon}</span>
-                  {!sidebarCollapsed && <><span>{item.label}</span>{item.badge !== undefined && <span className="nav-badge">{item.badge}</span>}</>}
+                  {!sidebarCollapsed && (
+                    <>
+                      <span>{item.label}</span>
+                      {item.badge !== undefined && <span className="nav-badge">{item.badge}</span>}
+                    </>
+                  )}
                 </div>
               </Tooltip>
             ))}
           </nav>
         ))}
         {!sidebarCollapsed && <div className="shortcut-hint">Press <kbd>?</kbd> for shortcuts</div>}
-        <div className="sidebar-footer">{sidebarCollapsed ? <div style={{width:40,height:40,background:'linear-gradient(135deg,#10b981,#059669)',borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:14,margin:'0 auto'}}>JD</div> : <UserMenu onNavigate={handleNavigate} />}</div>
+        <div className="sidebar-footer">
+          {sidebarCollapsed ? (
+            <div style={{width:40,height:40,background:'linear-gradient(135deg,#10b981,#059669)',borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:14,margin:'0 auto'}}>JD</div>
+          ) : (
+            <UserMenu onNavigate={handleNavigate} />
+          )}
+        </div>
       </aside>
 
       {/* Main */}
@@ -261,67 +359,189 @@ function Dashboard() {
           <NotificationBell />
         </div>
 
-        {section === 'dashboard' && <DashboardView candidates={candidates} jobs={jobs} onNavigate={handleNavigate} />}
+        {section === 'dashboard' && (
+          <DashboardView candidates={candidates} jobs={jobs} onNavigate={handleNavigate} />
+        )}
         
-        {section === 'whatsapp' && <WhatsAppCampaign candidates={candidates} />}
-        
-        {section === 'imported' && <ImportedCandidatesView 
-          onSelectCandidate={setSelectedCandidate} 
-          onOpenImport={() => setShowImport(true)} 
-          onStartCampaign={(selectedCandidates) => {
-            // Store selected candidates for WhatsApp campaign
-            (window as any).__importedCampaignCandidates = selectedCandidates;
-            setSection('whatsapp');
-          }}
-        />}
-        
-        {section === 'candidates' && <>
-          <div className="topbar">
-            <div className="topbar-left">
-              <h1 className="page-title">Candidates</h1>
-              <div className="view-toggle">
-                <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')}>☰ List</button>
-                <button className={`view-btn ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')}>▦ Kanban</button>
+        {section === 'whatsapp' && (
+          <WhatsAppCampaign candidates={candidates} />
+        )}
+
+        {section === 'call-history' && (
+          <>
+            <div className="topbar">
+              <div className="topbar-left">
+                <h1 className="page-title">📞 Call History</h1>
+                <span style={{ fontSize: 13, color: '#6b7280' }}>AI-analyzed call recordings</span>
               </div>
             </div>
-            <div className="topbar-right">
-              <BlindModeToggle enabled={blindMode} onToggle={setBlindMode} />
-              <SearchBar onSearch={handleSearch} initialValue={searchQuery} />
-              <button className="topbar-btn secondary" onClick={() => setShowImport(true)} style={{background:'#f3f4f6',color:'#374151',border:'1px solid #e5e7eb'}}>📥 Import</button>
-              <button className="topbar-btn primary" onClick={() => setShowAddCandidate(true)}>+ Add Candidate</button>
+            <div className="content">
+              <CalledCandidatesView onSelectCandidate={setSelectedCandidate} />
             </div>
-          </div>
-          <div className="stats-bar">
-            {[{ k: 'all', v: stats.total, l: 'Total' }, { k: 'new', v: stats.new, l: 'New' }, { k: 'screening', v: stats.screening, l: 'Screening' }, { k: 'interview', v: stats.interview, l: 'Interview' }, { k: 'offer', v: stats.offer, l: 'Offer' }, { k: 'hired', v: stats.hired, l: 'Hired', c: '#059669' }].map(s => (
-              <div key={s.k} className={`stat-card ${statusFilter === s.k ? 'active' : ''}`} onClick={() => setStatusFilter(s.k)}><div className="stat-value" style={s.c ? {color:s.c} : {}}>{s.v}</div><div className="stat-label">{s.l}</div></div>
-            ))}
-          </div>
-          <div className="filters-bar">
-            <FilterPresets currentFilters={{ status: statusFilter, qualification: qualFilter, energy: energyFilter, job: jobFilter }} onApply={handleFilterPreset} />
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <select className="filter-select" value={jobFilter} onChange={e => setJobFilter(e.target.value)}><option value="all">All Jobs</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</select>
-              <select className="filter-select" value={qualFilter} onChange={e => setQualFilter(e.target.value)}><option value="all">All Qualifications</option><option value="driver">🚗 Drivers Only</option><option value="dbs">🔒 DBS Checked</option><option value="training">📚 Training Done</option></select>
-              {(statusFilter !== 'all' || qualFilter !== 'all' || energyFilter !== 'all' || jobFilter !== 'all') && <button className="filter-clear" onClick={clearFilters}>✕ Clear Filters</button>}
+          </>
+        )}
+        
+        {section === 'imported' && (
+          <ImportedCandidatesView 
+            onSelectCandidate={setSelectedCandidate} 
+            onOpenImport={() => setShowImport(true)} 
+            onStartCampaign={(selectedCandidates) => {
+              (window as any).__importedCampaignCandidates = selectedCandidates;
+              setSection('whatsapp');
+            }}
+          />
+        )}
+        
+        {section === 'candidates' && (
+          <>
+            <div className="topbar">
+              <div className="topbar-left">
+                <h1 className="page-title">Candidates</h1>
+                <div className="view-toggle">
+                  <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')}>☰ List</button>
+                  <button className={`view-btn ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')}>▦ Kanban</button>
+                </div>
+              </div>
+              <div className="topbar-right">
+                <BlindModeToggle enabled={blindMode} onToggle={setBlindMode} />
+                <SearchBar onSearch={handleSearch} initialValue={searchQuery} />
+                <button className="topbar-btn secondary" onClick={() => setShowImport(true)} style={{background:'#f3f4f6',color:'#374151',border:'1px solid #e5e7eb'}}>📥 Import</button>
+                <button className="topbar-btn primary" onClick={() => setShowAddCandidate(true)}>+ Add Candidate</button>
+              </div>
             </div>
-          </div>
-          <div className="content">
-            {loading ? (viewMode === 'kanban' ? <KanbanSkeleton /> : <CandidateListSkeleton />) : filtered.length === 0 ? <EmptyState type={searchQuery ? 'search' : 'candidates'} searchQuery={searchQuery} onAction={searchQuery ? clearFilters : () => setShowAddCandidate(true)} /> : viewMode === 'kanban' ? <KanbanView candidates={filtered} stages={pipeline.stages} onUpdate={fetchCandidates} onCandidateClick={setSelectedCandidate} /> : <CandidatesView candidates={filtered} searchQuery={searchQuery} selected={selected} onSelect={setSelected} onCandidateClick={setSelectedCandidate} onUpdate={fetchCandidates} />}
-          </div>
-        </>}
+            <div className="stats-bar">
+              {[
+                { k: 'all', v: stats.total, l: 'Total' }, 
+                { k: 'new', v: stats.new, l: 'New' }, 
+                { k: 'screening', v: stats.screening, l: 'Screening' }, 
+                { k: 'interview', v: stats.interview, l: 'Interview' }, 
+                { k: 'offer', v: stats.offer, l: 'Offer' }, 
+                { k: 'hired', v: stats.hired, l: 'Hired', c: '#059669' }
+              ].map(s => (
+                <div key={s.k} className={`stat-card ${statusFilter === s.k ? 'active' : ''}`} onClick={() => setStatusFilter(s.k)}>
+                  <div className="stat-value" style={s.c ? {color:s.c} : {}}>{s.v}</div>
+                  <div className="stat-label">{s.l}</div>
+                </div>
+              ))}
+            </div>
+            <div className="filters-bar">
+              <FilterPresets currentFilters={{ status: statusFilter, qualification: qualFilter, energy: energyFilter, job: jobFilter }} onApply={handleFilterPreset} />
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                <select className="filter-select" value={jobFilter} onChange={e => setJobFilter(e.target.value)}>
+                  <option value="all">All Jobs</option>
+                  {jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
+                </select>
+                <select className="filter-select" value={qualFilter} onChange={e => setQualFilter(e.target.value)}>
+                  <option value="all">All Qualifications</option>
+                  <option value="driver">🚗 Drivers Only</option>
+                  <option value="dbs">🔒 DBS Checked</option>
+                  <option value="training">📚 Training Done</option>
+                </select>
+                {(statusFilter !== 'all' || qualFilter !== 'all' || energyFilter !== 'all' || jobFilter !== 'all') && (
+                  <button className="filter-clear" onClick={clearFilters}>✕ Clear Filters</button>
+                )}
+              </div>
+            </div>
+            <div className="content">
+              {loading ? (
+                viewMode === 'kanban' ? <KanbanSkeleton /> : <CandidateListSkeleton />
+              ) : filtered.length === 0 ? (
+                <EmptyState type={searchQuery ? 'search' : 'candidates'} searchQuery={searchQuery} onAction={searchQuery ? clearFilters : () => setShowAddCandidate(true)} />
+              ) : viewMode === 'kanban' ? (
+                <KanbanView candidates={filtered} stages={pipeline.stages} onUpdate={fetchCandidates} onCandidateClick={setSelectedCandidate} />
+              ) : (
+                <CandidatesView candidates={filtered} searchQuery={searchQuery} selected={selected} onSelect={setSelected} onCandidateClick={setSelectedCandidate} onUpdate={fetchCandidates} />
+              )}
+            </div>
+          </>
+        )}
 
-        {section === 'jobs' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Jobs</h1></div><div className="topbar-right"><button className="topbar-btn primary" onClick={() => setShowAddJob(true)}>+ Create Job</button></div></div><div className="content"><JobsView jobs={jobs} candidates={candidates} onUpdate={fetchJobs} onCreateJob={() => setShowAddJob(true)} /></div></>}
-        {section === 'interviews' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Interviews</h1></div></div><div className="content"><CalendarView candidates={candidates} /></div></>}
-        {section === 'talent-pools' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Talent Pools</h1></div></div><div className="content"><TalentPoolView candidates={candidates} /></div></>}
-        {section === 'referrals' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Employee Referrals</h1></div></div><div className="content"><ReferralView jobs={jobs} /></div></>}
-        {section === 'onboarding' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Onboarding</h1></div></div><div className="content"><OnboardingView /></div></>}
-        {section === 'reports' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Reports</h1></div></div><div className="content"><ReportsView candidates={candidates} jobs={jobs} /></div></>}
-        {section === 'surveys' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Candidate Experience</h1></div></div><div className="content"><CandidateSurveyView /></div></>}
-        {section === 'templates' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Email Templates</h1></div></div><div className="content"><TemplatesView /></div></>}
-        {section === 'automations' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Automations</h1></div></div><div className="content"><AutomationsView /></div></>}
-        {section === 'compliance' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Compliance & GDPR</h1></div></div><div className="content"><ComplianceView /></div></>}
-        {section === 'settings' && <><div className="topbar"><div className="topbar-left"><h1 className="page-title">Settings</h1></div></div><div className="content"><SettingsView /></div></>}
+        {section === 'jobs' && (
+          <>
+            <div className="topbar">
+              <div className="topbar-left"><h1 className="page-title">Jobs</h1></div>
+              <div className="topbar-right">
+                <button className="topbar-btn primary" onClick={() => setShowAddJob(true)}>+ Create Job</button>
+              </div>
+            </div>
+            <div className="content">
+              <JobsView jobs={jobs} candidates={candidates} onUpdate={fetchJobs} onCreateJob={() => setShowAddJob(true)} />
+            </div>
+          </>
+        )}
+
+        {section === 'interviews' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Interviews</h1></div></div>
+            <div className="content"><CalendarView candidates={candidates} /></div>
+          </>
+        )}
+
+        {section === 'talent-pools' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Talent Pools</h1></div></div>
+            <div className="content"><TalentPoolView candidates={candidates} /></div>
+          </>
+        )}
+
+        {section === 'referrals' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Employee Referrals</h1></div></div>
+            <div className="content"><ReferralView jobs={jobs} /></div>
+          </>
+        )}
+
+        {section === 'onboarding' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Onboarding</h1></div></div>
+            <div className="content"><OnboardingView /></div>
+          </>
+        )}
+
+        {section === 'reports' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Reports</h1></div></div>
+            <div className="content"><ReportsView candidates={candidates} jobs={jobs} /></div>
+          </>
+        )}
+
+        {section === 'surveys' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Candidate Experience</h1></div></div>
+            <div className="content"><CandidateSurveyView /></div>
+          </>
+        )}
+
+        {section === 'templates' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Email Templates</h1></div></div>
+            <div className="content"><TemplatesView /></div>
+          </>
+        )}
+
+        {section === 'automations' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Automations</h1></div></div>
+            <div className="content"><AutomationsView /></div>
+          </>
+        )}
+
+        {section === 'compliance' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Compliance & GDPR</h1></div></div>
+            <div className="content"><ComplianceView /></div>
+          </>
+        )}
+
+        {section === 'settings' && (
+          <>
+            <div className="topbar"><div className="topbar-left"><h1 className="page-title">Settings</h1></div></div>
+            <div className="content"><SettingsView /></div>
+          </>
+        )}
       </main>
 
+      {/* Modals */}
       {showAddCandidate && <CandidateModal onClose={() => setShowAddCandidate(false)} onSave={handleAddCandidate} jobs={jobs} />}
       {showAddJob && <JobModal onClose={() => setShowAddJob(false)} onSave={handleAddJob} />}
       {showImport && <CandidateImport onClose={() => setShowImport(false)} onImportComplete={() => { fetchCandidates(); fetchImportedCount(); toast.success('Candidates imported successfully'); }} />}
