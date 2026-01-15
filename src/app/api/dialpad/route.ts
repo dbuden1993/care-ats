@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -206,7 +206,7 @@ async function createShareLink(recordingId: string, recordingType: string): Prom
   }
 }
 
-async function downloadRecording(shareLink: string): Promise<Buffer | null> {
+async function downloadRecording(shareLink: string): Promise<ArrayBuffer | null> {
   try {
     const response = await fetch(shareLink, {
       headers: {
@@ -225,17 +225,21 @@ async function downloadRecording(shareLink: string): Promise<Buffer | null> {
       return null;
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return await response.arrayBuffer();
   } catch (e) {
     console.error('Download error:', e);
     return null;
   }
 }
 
-async function transcribeWithWhisper(audioBuffer: Buffer): Promise<string | null> {
+async function transcribeWithWhisper(audioBuffer: ArrayBuffer): Promise<string | null> {
   try {
-    const audioFile = new File([audioBuffer], 'recording.mp3', { type: 'audio/mpeg' });
+    // Convert ArrayBuffer to File using OpenAI's toFile helper
+    const audioFile = await toFile(
+      new Uint8Array(audioBuffer),
+      'recording.mp3',
+      { type: 'audio/mpeg' }
+    );
 
     const response = await openai.audio.transcriptions.create({
       file: audioFile,
