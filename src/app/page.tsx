@@ -17,6 +17,7 @@ import CandidateSurveyView from './CandidateSurvey';
 import ComplianceView from './ComplianceView';
 import DashboardView from './DashboardView';
 import WhatsAppCampaign from './WhatsAppCampaign';
+import SMSCampaign from './SMSCampaign';
 import SearchBar from './SearchBar';
 import CandidateModal from './CandidateModal';
 import JobModal from './JobModal';
@@ -44,7 +45,7 @@ import type { Job, Pipeline, ViewMode, SidebarSection } from './types';
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
-type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history';
+type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms';
 
 function Dashboard() {
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -70,6 +71,7 @@ function Dashboard() {
   const [showImport, setShowImport] = useState(false);
   const [importedCount, setImportedCount] = useState(0);
   const [callHistoryCount, setCallHistoryCount] = useState(0);
+  const [totalCandidates, setTotalCandidates] = useState(0);
   
   const toast = useToast();
 
@@ -78,6 +80,7 @@ function Dashboard() {
     { key: 'j', ctrl: true, description: 'Add job', action: () => setShowAddJob(true) },
     { key: 'k', description: 'Kanban view', action: () => { setSection('candidates'); setViewMode('kanban'); } },
     { key: 'l', description: 'List view', action: () => { setSection('candidates'); setViewMode('list'); } },
+    { key: 's', description: 'SMS Campaign', action: () => setSection('sms') },
     { key: 'w', description: 'WhatsApp campaigns', action: () => setSection('whatsapp') },
     { key: 'c', description: 'Call history', action: () => setSection('call-history') },
     { key: '?', shift: true, description: 'Show shortcuts', action: () => setShowShortcuts(true) },
@@ -120,7 +123,6 @@ function Dashboard() {
         .select('id', { count: 'exact' })
         .is('last_called_at', null);
       
-      console.log('Imported count query result:', { count, error, dataLength: data?.length });
       setImportedCount(count || data?.length || 0);
     } catch (e) { console.error('Failed to count imported:', e); }
   }, []);
@@ -134,12 +136,22 @@ function Dashboard() {
     } catch (e) { console.error('Failed to count call history:', e); }
   }, []);
 
+  const fetchTotalCandidates = useCallback(async () => {
+    try {
+      const { count } = await supabase
+        .from('candidates')
+        .select('id', { count: 'exact' });
+      setTotalCandidates(count || 0);
+    } catch (e) { console.error('Failed to count total candidates:', e); }
+  }, []);
+
   useEffect(() => { 
     fetchCandidates(); 
     fetchJobs(); 
     fetchImportedCount(); 
-    fetchCallHistoryCount(); 
-  }, [fetchCandidates, fetchJobs, fetchImportedCount, fetchCallHistoryCount]);
+    fetchCallHistoryCount();
+    fetchTotalCandidates();
+  }, [fetchCandidates, fetchJobs, fetchImportedCount, fetchCallHistoryCount, fetchTotalCandidates]);
 
   const handleSearch = (q: string) => { setSearchQuery(q); fetchCandidates(q); };
   
@@ -160,6 +172,7 @@ function Dashboard() {
       }]);
       toast.success('Candidate added successfully');
       fetchCandidates();
+      fetchTotalCandidates();
     } catch (err) { toast.error('Failed to add candidate'); }
     setShowAddCandidate(false);
   };
@@ -191,6 +204,7 @@ function Dashboard() {
     else if (action === 'candidate' && data) setSelectedCandidate(data);
     else if (action === 'candidates') { setSection('candidates'); if (data?.status) setStatusFilter(data.status); }
     else if (action === 'whatsapp') setSection('whatsapp');
+    else if (action === 'sms') setSection('sms');
     else if (action === 'call-history') setSection('call-history');
     else setSection(action as ExtendedSection);
   };
@@ -241,6 +255,7 @@ function Dashboard() {
       { id: 'interviews', icon: '📅', label: 'Interviews' }
     ] },
     { section: 'OUTREACH', items: [
+      { id: 'sms', icon: '📱', label: 'SMS Campaign', badge: importedCount > 0 ? '!' : undefined },
       { id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' }
     ] },
     { section: 'TALENT', items: [
@@ -277,11 +292,15 @@ function Dashboard() {
         .nav-item:hover{background:#f3f4f6;color:#111}
         .nav-item.active{background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:#4f46e5;font-weight:600}
         .nav-item.whatsapp.active{background:linear-gradient(135deg,#ecfdf5,#d1fae5);color:#059669}
-        .nav-item.call-history.active{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#d97706}
+        .nav-item.sms.active{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#d97706}
+        .nav-item.call-history.active{background:linear-gradient(135deg,#fce7f3,#fbcfe8);color:#db2777}
         .nav-icon{width:20px;text-align:center;font-size:15px}
         .nav-badge{background:#e5e7eb;color:#374151;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:auto}
+        .nav-badge.alert{background:#fef3c7;color:#d97706;animation:pulse 2s infinite}
         .nav-item.active .nav-badge{background:#c7d2fe;color:#4f46e5}
-        .nav-item.call-history.active .nav-badge{background:#fde68a;color:#d97706}
+        .nav-item.sms.active .nav-badge{background:#fde68a;color:#d97706}
+        .nav-item.call-history.active .nav-badge{background:#fbcfe8;color:#db2777}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}
         .sidebar-footer{margin-top:auto;padding:16px;border-top:1px solid #f3f4f6}
         .collapse-btn{position:absolute;right:-14px;top:24px;width:28px;height:28px;background:#fff;border:1px solid #e5e7eb;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;color:#6b7280;box-shadow:0 2px 8px rgba(0,0,0,.08);transition:all .15s;z-index:10}
         .collapse-btn:hover{background:#f9fafb;transform:scale(1.05)}
@@ -327,14 +346,18 @@ function Dashboard() {
             {group.items.map(item => (
               <Tooltip key={item.id} content={sidebarCollapsed ? item.label : ''} position="right">
                 <div 
-                  className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${item.id === 'call-history' ? 'call-history' : ''} ${section === item.id ? 'active' : ''}`} 
+                  className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${item.id === 'sms' ? 'sms' : ''} ${item.id === 'call-history' ? 'call-history' : ''} ${section === item.id ? 'active' : ''}`} 
                   onClick={() => setSection(item.id as ExtendedSection)}
                 >
                   <span className="nav-icon">{item.icon}</span>
                   {!sidebarCollapsed && (
                     <>
                       <span>{item.label}</span>
-                      {item.badge !== undefined && <span className="nav-badge">{item.badge}</span>}
+                      {item.badge !== undefined && (
+                        <span className={`nav-badge ${item.badge === '!' ? 'alert' : ''}`}>
+                          {item.badge}
+                        </span>
+                      )}
                     </>
                   )}
                 </div>
@@ -365,6 +388,20 @@ function Dashboard() {
         
         {section === 'whatsapp' && (
           <WhatsAppCampaign candidates={candidates} />
+        )}
+
+        {section === 'sms' && (
+          <>
+            <div className="topbar">
+              <div className="topbar-left">
+                <h1 className="page-title">📱 SMS Campaign</h1>
+                <span style={{ fontSize: 13, color: '#6b7280' }}>Bulk SMS to {totalCandidates.toLocaleString()} candidates</span>
+              </div>
+            </div>
+            <div className="content">
+              <SMSCampaign />
+            </div>
+          </>
         )}
 
         {section === 'call-history' && (
@@ -544,7 +581,7 @@ function Dashboard() {
       {/* Modals */}
       {showAddCandidate && <CandidateModal onClose={() => setShowAddCandidate(false)} onSave={handleAddCandidate} jobs={jobs} />}
       {showAddJob && <JobModal onClose={() => setShowAddJob(false)} onSave={handleAddJob} />}
-      {showImport && <CandidateImport onClose={() => setShowImport(false)} onImportComplete={() => { fetchCandidates(); fetchImportedCount(); toast.success('Candidates imported successfully'); }} />}
+      {showImport && <CandidateImport onClose={() => setShowImport(false)} onImportComplete={() => { fetchCandidates(); fetchImportedCount(); fetchTotalCandidates(); toast.success('Candidates imported successfully'); }} />}
       {scheduleCandidate && <ScheduleModal candidate={scheduleCandidate} onClose={() => setScheduleCandidate(null)} onSchedule={() => { toast.success('Interview scheduled'); setScheduleCandidate(null); }} />}
       {emailCandidate && <EmailComposer candidate={emailCandidate} onClose={() => setEmailCandidate(null)} onSend={(d: any) => { toast.success(`Email sent to ${d.to}`); setEmailCandidate(null); }} />}
       {selectedCandidate && <CandidateDetailPanel candidate={selectedCandidate} onClose={() => setSelectedCandidate(null)} onUpdate={fetchCandidates} onSchedule={() => setScheduleCandidate(selectedCandidate)} onEmail={() => setEmailCandidate(selectedCandidate)} />}
