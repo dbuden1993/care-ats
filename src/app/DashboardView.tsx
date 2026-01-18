@@ -1,371 +1,576 @@
 'use client';
-import { useMemo } from 'react';
-import AnimatedCounter from './AnimatedCounter';
-import ProgressRing from './ProgressRing';
-import StatusBadge from './StatusBadge';
-import Avatar from './Avatar';
+import React, { useEffect, useState } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
 
-interface Props {
-  candidates: any[];
-  jobs: any[];
-  onNavigate: (section: string, filter?: any) => void;
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+interface DashboardStats {
+  totalCandidates: number;
+  newThisWeek: number;
+  callsToday: number;
+  callsThisWeek: number;
+  gradeACandidates: number;
+  pendingFollowUps: number;
+  avgEnergyScore: number;
+  candidatesByStatus: Record<string, number>;
 }
 
-export default function DashboardView({ candidates, jobs, onNavigate }: Props) {
-  const metrics = useMemo(() => {
-    const now = Date.now();
-    const weekAgo = now - 7 * 86400000;
-    const monthAgo = now - 30 * 86400000;
+interface RecentCall {
+  id: string;
+  candidate_name: string;
+  phone_e164: string;
+  call_time: string;
+  energy_score: number | null;
+  quality_assessment: string | null;
+  call_summary: string | null;
+}
 
-    const newThisWeek = candidates.filter(c => new Date(c.created_at).getTime() > weekAgo).length;
-    const hiredThisMonth = candidates.filter(c => c.status === 'hired' && new Date(c.updated_at).getTime() > monthAgo).length;
-    
-    const byStatus: Record<string, number> = {};
-    candidates.forEach(c => { byStatus[c.status] = (byStatus[c.status] || 0) + 1; });
+interface FollowUpCandidate {
+  id: string;
+  name: string;
+  phone_e164: string;
+  status: string;
+  earliest_start_date: string | null;
+  last_called_at: string | null;
+  energy_score: number | null;
+}
 
-    const bySource: Record<string, number> = {};
-    candidates.forEach(c => { bySource[c.source || 'direct'] = (bySource[c.source || 'direct'] || 0) + 1; });
+export default function RecruiterDashboard() {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
+  const [followUps, setFollowUps] = useState<FollowUpCandidate[]>([]);
+  const [topCandidates, setTopCandidates] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-    const openJobs = jobs.filter(j => j.status === 'open');
-    
-    const conversionRate = candidates.length > 0 
-      ? Math.round(((byStatus['hired'] || 0) / candidates.length) * 100)
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
+
+  async function loadDashboardData() {
+    setLoading(true);
+
+    const today = new Date();
+    const weekAgo = new Date(today);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const todayStr = today.toISOString().split('T')[0];
+    const weekAgoStr = weekAgo.toISOString();
+
+    // Fetch all data in parallel
+    const [
+      candidatesResult,
+      newCandidatesResult,
+      callHistoryResult,
+      todayCallsResult,
+      gradeAResult,
+      recentCallsResult
+    ] = await Promise.all([
+      // Total candidates
+      supabase.from('candidates').select('id, status', { count: 'exact' }),
+      // New this week
+      supabase.from('candidates').select('id', { count: 'exact' }).gte('created_at', weekAgoStr),
+      // All calls this week
+      supabase.from('call_history').select('id, energy_score', { count: 'exact' }).gte('call_time', weekAgoStr),
+      // Calls today
+      supabase.from('call_history').select('id', { count: 'exact' }).gte('call_time', todayStr),
+      // Grade A candidates from calls
+      supabase.from('call_history').select('id', { count: 'exact' }).in('quality_assessment', ['A', 'HIGH']),
+      // Recent calls with details
+      supabase.from('call_history')
+        .select('id, candidate_name, phone_e164, call_time, energy_score, quality_assessment, call_summary')
+        .order('call_time', { ascending: false })
+        .limit(5)
+    ]);
+
+    // Calculate average energy score
+    const energyScores = callHistoryResult.data?.map(c => c.energy_score).filter(Boolean) || [];
+    const avgEnergy = energyScores.length > 0 
+      ? energyScores.reduce((a, b) => a + b, 0) / energyScores.length 
       : 0;
 
-    const responseRate = 78; // Mock
+    // Count by status
+    const statusCounts: Record<string, number> = {};
+    candidatesResult.data?.forEach(c => {
+      const status = c.status || 'new';
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+    });
 
-    return { 
-      newThisWeek, 
-      hiredThisMonth, 
-      byStatus, 
-      bySource, 
-      openJobs: openJobs.length, 
-      conversionRate,
-      responseRate,
-      total: candidates.length
-    };
-  }, [candidates, jobs]);
+    setStats({
+      totalCandidates: candidatesResult.count || 0,
+      newThisWeek: newCandidatesResult.count || 0,
+      callsToday: todayCallsResult.count || 0,
+      callsThisWeek: callHistoryResult.count || 0,
+      gradeACandidates: gradeAResult.count || 0,
+      pendingFollowUps: statusCounts['callback'] || statusCounts['follow_up'] || 0,
+      avgEnergyScore: Math.round(avgEnergy * 10) / 10,
+      candidatesByStatus: statusCounts
+    });
 
-  const recentCandidates = candidates
-    .filter(c => c.created_at)
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 5);
+    setRecentCalls(recentCallsResult.data || []);
 
-  const urgentActions = [
-    ...(metrics.byStatus['interview'] > 0 ? [{ icon: '📅', text: `${metrics.byStatus['interview']} candidates awaiting interview`, action: () => onNavigate('candidates', { status: 'interview' }), priority: 'high' }] : []),
-    ...(metrics.byStatus['offer'] > 0 ? [{ icon: '📝', text: `${metrics.byStatus['offer']} offers pending response`, action: () => onNavigate('candidates', { status: 'offer' }), priority: 'high' }] : []),
-    ...(metrics.byStatus['new'] > 5 ? [{ icon: '👀', text: `${metrics.byStatus['new']} new applications to review`, action: () => onNavigate('candidates', { status: 'new' }), priority: 'medium' }] : []),
-    ...(metrics.openJobs === 0 ? [{ icon: '💼', text: 'No open positions - create a job listing', action: () => onNavigate('add-job'), priority: 'low' }] : []),
-  ];
+    // Get top candidates (high energy, recent)
+    const { data: topData } = await supabase
+      .from('call_history')
+      .select('id, candidate_name, phone_e164, energy_score, quality_assessment, roles, call_time')
+      .in('quality_assessment', ['A', 'HIGH', 'B'])
+      .order('energy_score', { ascending: false })
+      .limit(10);
 
-  const fmtDate = (d: string) => {
-    if (!d) return '';
-    const date = new Date(d);
+    setTopCandidates(topData || []);
+
+    // Get candidates needing follow-up
+    const { data: followUpData } = await supabase
+      .from('candidates')
+      .select('id, name, phone_e164, status, earliest_start_date, last_called_at')
+      .in('status', ['new', 'callback', 'screening'])
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    setFollowUps(followUpData || []);
+
+    setLoading(false);
+  }
+
+  const formatTime = (dateStr: string) => {
+    const date = new Date(dateStr);
     const now = new Date();
-    const diff = (now.getTime() - date.getTime()) / 1000;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
     return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   };
 
-  const getRoles = (roles: any): string => {
-    if (!roles) return 'No role specified';
-    if (Array.isArray(roles)) return roles.join(', ');
-    return String(roles);
+  const getQualityColor = (quality: string | null) => {
+    switch (quality?.toUpperCase()) {
+      case 'A': case 'HIGH': return { bg: '#dcfce7', text: '#166534' };
+      case 'B': return { bg: '#dbeafe', text: '#1e40af' };
+      case 'C': case 'MEDIUM': return { bg: '#fef9c3', text: '#854d0e' };
+      default: return { bg: '#f3f4f6', text: '#374151' };
+    }
   };
 
-  const greeting = (() => {
+  const getEnergyColor = (score: number | null) => {
+    if (!score) return '#9ca3af';
+    if (score >= 8) return '#22c55e';
+    if (score >= 6) return '#3b82f6';
+    if (score >= 4) return '#eab308';
+    return '#ef4444';
+  };
+
+  const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good morning';
     if (hour < 17) return 'Good afternoon';
     return 'Good evening';
-  })();
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: '40px', textAlign: 'center' }}>
+        <div style={{ fontSize: '24px', marginBottom: '10px' }}>📊</div>
+        <div style={{ color: '#6b7280' }}>Loading dashboard...</div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: 24, background: '#f8fafc', minHeight: '100%' }}>
-      <style>{`
-        .dash-header{margin-bottom:24px}
-        .dash-greeting{font-size:24px;font-weight:700;color:#111;margin-bottom:4px}
-        .dash-subtext{font-size:14px;color:#6b7280}
-        .dash-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
-        @media(max-width:1200px){.dash-grid{grid-template-columns:repeat(2,1fr)}}
-        @media(max-width:768px){.dash-grid{grid-template-columns:1fr}}
-        .dash-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:20px;transition:all .2s;cursor:pointer;position:relative;overflow:hidden}
-        .dash-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent-light));opacity:0;transition:opacity .2s}
-        .dash-card:hover{box-shadow:0 8px 24px rgba(0,0,0,.08);transform:translateY(-2px)}
-        .dash-card:hover::before{opacity:1}
-        .dash-card-header{display:flex;justify-content:space-between;align-items:start;margin-bottom:16px}
-        .dash-card-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px}
-        .dash-card-trend{display:flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:4px 10px;border-radius:20px}
-        .dash-card-trend.up{background:#ecfdf5;color:#059669}
-        .dash-card-trend.down{background:#fef2f2;color:#dc2626}
-        .dash-card-trend.neutral{background:#f3f4f6;color:#6b7280}
-        .dash-card-value{font-size:36px;font-weight:800;color:#111;margin-bottom:4px;font-variant-numeric:tabular-nums}
-        .dash-card-label{font-size:13px;color:#6b7280;font-weight:500}
-        .dash-section{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px}
-        @media(max-width:1000px){.dash-section{grid-template-columns:1fr}}
-        .dash-panel{background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden}
-        .dash-panel-header{padding:18px 20px;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between;align-items:center}
-        .dash-panel-title{font-size:15px;font-weight:600;color:#111}
-        .dash-panel-link{font-size:12px;color:#6366f1;cursor:pointer;font-weight:500;display:flex;align-items:center;gap:4px;transition:gap .2s}
-        .dash-panel-link:hover{gap:8px}
-        .dash-panel-body{padding:16px 20px}
-        .dash-candidate{display:flex;align-items:center;gap:14px;padding:12px;border-radius:12px;cursor:pointer;transition:all .15s;margin-bottom:8px}
-        .dash-candidate:last-child{margin-bottom:0}
-        .dash-candidate:hover{background:#f9fafb}
-        .dash-candidate-info{flex:1;min-width:0}
-        .dash-candidate-name{font-size:14px;font-weight:600;color:#111;margin-bottom:2px}
-        .dash-candidate-role{font-size:12px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .dash-candidate-meta{display:flex;align-items:center;gap:8px}
-        .dash-candidate-date{font-size:11px;color:#9ca3af}
-        .dash-urgent{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:12px;margin-bottom:10px;cursor:pointer;transition:all .15s;border-left:4px solid}
-        .dash-urgent:last-child{margin-bottom:0}
-        .dash-urgent.high{background:#fef2f2;border-color:#ef4444}
-        .dash-urgent.high:hover{background:#fee2e2}
-        .dash-urgent.medium{background:#fef3c7;border-color:#f59e0b}
-        .dash-urgent.medium:hover{background:#fde68a}
-        .dash-urgent.low{background:#f3f4f6;border-color:#9ca3af}
-        .dash-urgent.low:hover{background:#e5e7eb}
-        .dash-urgent-icon{font-size:20px}
-        .dash-urgent-text{flex:1;font-size:13px;font-weight:500;color:#374151}
-        .dash-urgent-arrow{color:#9ca3af;transition:transform .2s}
-        .dash-urgent:hover .dash-urgent-arrow{transform:translateX(4px)}
-        .dash-funnel{display:flex;flex-direction:column;gap:12px}
-        .dash-funnel-row{display:flex;align-items:center;gap:14px}
-        .dash-funnel-label{width:80px;font-size:13px;color:#374151;font-weight:500}
-        .dash-funnel-bar{flex:1;height:32px;background:#f3f4f6;border-radius:8px;overflow:hidden;position:relative}
-        .dash-funnel-fill{height:100%;display:flex;align-items:center;padding-left:12px;font-size:12px;font-weight:600;color:#fff;border-radius:8px;transition:width .8s cubic-bezier(.4,0,.2,1)}
-        .dash-funnel-count{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:12px;color:#6b7280;font-weight:600}
-        .dash-empty{text-align:center;padding:48px 20px;color:#9ca3af}
-        .dash-empty-icon{font-size:40px;margin-bottom:12px;opacity:.6}
-        .dash-empty-text{font-size:14px;margin-bottom:16px}
-        .dash-empty-btn{padding:10px 20px;background:#4f46e5;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;transition:background .15s}
-        .dash-empty-btn:hover{background:#4338ca}
-        .dash-metrics{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:8px 0}
-        .dash-metric{display:flex;align-items:center;gap:16px}
-        .dash-metric-info h4{font-size:13px;font-weight:600;color:#111;margin:0 0 4px}
-        .dash-metric-info p{font-size:11px;color:#6b7280;margin:0}
-        .dash-activity{display:flex;flex-direction:column;gap:0}
-        .dash-activity-item{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #f3f4f6;position:relative}
-        .dash-activity-item:last-child{border-bottom:none}
-        .dash-activity-dot{width:10px;height:10px;border-radius:50%;margin-top:4px;flex-shrink:0}
-        .dash-activity-content{flex:1}
-        .dash-activity-text{font-size:13px;color:#374151;margin-bottom:2px}
-        .dash-activity-text strong{font-weight:600;color:#111}
-        .dash-activity-time{font-size:11px;color:#9ca3af}
-      `}</style>
-
+    <div style={{ padding: '24px', maxWidth: '1400px', margin: '0 auto' }}>
       {/* Header */}
-      <div className="dash-header">
-        <h1 className="dash-greeting">{greeting}! 👋</h1>
-        <p className="dash-subtext">Here's what's happening with your recruitment pipeline</p>
+      <div style={{ marginBottom: '24px' }}>
+        <h1 style={{ fontSize: '28px', fontWeight: '700', color: '#1f2937', marginBottom: '4px' }}>
+          {getGreeting()}! 👋
+        </h1>
+        <p style={{ color: '#6b7280', fontSize: '15px' }}>
+          Here's your recruitment activity for today
+        </p>
       </div>
 
-      {/* KPI Cards */}
-      <div className="dash-grid">
-        <div 
-          className="dash-card" 
-          style={{ '--accent': '#6366f1', '--accent-light': '#818cf8' } as any}
-          onClick={() => onNavigate('candidates')}
-        >
-          <div className="dash-card-header">
-            <div className="dash-card-icon" style={{ background: 'linear-gradient(135deg, #eef2ff, #e0e7ff)' }}>👥</div>
-            <span className={`dash-card-trend ${metrics.newThisWeek > 0 ? 'up' : 'neutral'}`}>
-              {metrics.newThisWeek > 0 ? '↑' : '•'} {metrics.newThisWeek} this week
-            </span>
-          </div>
-          <div className="dash-card-value"><AnimatedCounter value={metrics.total} /></div>
-          <div className="dash-card-label">Total Candidates</div>
-        </div>
-        
-        <div 
-          className="dash-card"
-          style={{ '--accent': '#10b981', '--accent-light': '#34d399' } as any}
-          onClick={() => onNavigate('candidates', { status: 'hired' })}
-        >
-          <div className="dash-card-header">
-            <div className="dash-card-icon" style={{ background: 'linear-gradient(135deg, #ecfdf5, #d1fae5)' }}>✓</div>
-            <span className="dash-card-trend up">↑ {metrics.hiredThisMonth} this month</span>
-          </div>
-          <div className="dash-card-value" style={{ color: '#059669' }}>
-            <AnimatedCounter value={metrics.byStatus['hired'] || 0} />
-          </div>
-          <div className="dash-card-label">Total Hired</div>
-        </div>
-        
-        <div 
-          className="dash-card"
-          style={{ '--accent': '#f59e0b', '--accent-light': '#fbbf24' } as any}
-          onClick={() => onNavigate('jobs')}
-        >
-          <div className="dash-card-header">
-            <div className="dash-card-icon" style={{ background: 'linear-gradient(135deg, #fef3c7, #fde68a)' }}>💼</div>
-          </div>
-          <div className="dash-card-value"><AnimatedCounter value={metrics.openJobs} /></div>
-          <div className="dash-card-label">Open Positions</div>
-        </div>
-        
-        <div 
-          className="dash-card"
-          style={{ '--accent': '#8b5cf6', '--accent-light': '#a78bfa' } as any}
-          onClick={() => onNavigate('interviews')}
-        >
-          <div className="dash-card-header">
-            <div className="dash-card-icon" style={{ background: 'linear-gradient(135deg, #f3e8ff, #e9d5ff)' }}>📅</div>
-          </div>
-          <div className="dash-card-value"><AnimatedCounter value={metrics.byStatus['interview'] || 0} /></div>
-          <div className="dash-card-label">In Interview Stage</div>
-        </div>
+      {/* Main Stats */}
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: '16px',
+        marginBottom: '24px'
+      }}>
+        <StatCard 
+          icon="👥" 
+          label="Total Candidates" 
+          value={stats?.totalCandidates || 0}
+          subtext={`+${stats?.newThisWeek || 0} this week`}
+          color="#3b82f6"
+        />
+        <StatCard 
+          icon="📞" 
+          label="Calls Today" 
+          value={stats?.callsToday || 0}
+          subtext={`${stats?.callsThisWeek || 0} this week`}
+          color="#22c55e"
+        />
+        <StatCard 
+          icon="⭐" 
+          label="Grade A Candidates" 
+          value={stats?.gradeACandidates || 0}
+          subtext="Ready to place"
+          color="#f59e0b"
+        />
+        <StatCard 
+          icon="⚡" 
+          label="Avg Energy Score" 
+          value={stats?.avgEnergyScore || 0}
+          subtext="From all calls"
+          color="#8b5cf6"
+        />
       </div>
 
-      {/* Main Content */}
-      <div className="dash-section">
-        {/* Pipeline Funnel */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">📊 Hiring Pipeline</span>
-            <span className="dash-panel-link" onClick={() => onNavigate('candidates')}>View all →</span>
-          </div>
-          <div className="dash-panel-body">
-            <div className="dash-funnel">
-              {[
-                { stage: 'New', count: metrics.byStatus['new'] || 0, color: 'linear-gradient(90deg, #6366f1, #818cf8)' },
-                { stage: 'Screening', count: metrics.byStatus['screening'] || 0, color: 'linear-gradient(90deg, #8b5cf6, #a78bfa)' },
-                { stage: 'Interview', count: metrics.byStatus['interview'] || 0, color: 'linear-gradient(90deg, #f59e0b, #fbbf24)' },
-                { stage: 'Offer', count: metrics.byStatus['offer'] || 0, color: 'linear-gradient(90deg, #10b981, #34d399)' },
-                { stage: 'Hired', count: metrics.byStatus['hired'] || 0, color: 'linear-gradient(90deg, #059669, #10b981)' },
-              ].map(row => {
-                const maxCount = Math.max(...Object.values(metrics.byStatus), 1);
-                const width = Math.max((row.count / maxCount) * 100, row.count > 0 ? 20 : 5);
-                return (
-                  <div key={row.stage} className="dash-funnel-row">
-                    <span className="dash-funnel-label">{row.stage}</span>
-                    <div className="dash-funnel-bar">
-                      <div className="dash-funnel-fill" style={{ width: `${width}%`, background: row.color }}>
-                        {row.count > 0 && row.count}
+      {/* Two Column Layout */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+        
+        {/* Left Column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          
+          {/* Recent Calls */}
+          <div style={{ 
+            background: 'white', 
+            borderRadius: '12px', 
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            overflow: 'hidden'
+          }}>
+            <div style={{ 
+              padding: '16px 20px', 
+              borderBottom: '1px solid #e5e7eb',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                📞 Recent Calls
+              </h2>
+              <span style={{ fontSize: '13px', color: '#6b7280' }}>
+                {stats?.callsThisWeek || 0} this week
+              </span>
+            </div>
+            <div style={{ padding: '8px' }}>
+              {recentCalls.length === 0 ? (
+                <div style={{ padding: '32px', textAlign: 'center', color: '#9ca3af' }}>
+                  No calls recorded yet
+                </div>
+              ) : (
+                recentCalls.map(call => {
+                  const qualityColors = getQualityColor(call.quality_assessment);
+                  return (
+                    <div 
+                      key={call.id}
+                      style={{
+                        padding: '12px',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      {/* Quality Badge */}
+                      <div style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '8px',
+                        background: qualityColors.bg,
+                        color: qualityColors.text,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: '700',
+                        fontSize: '14px'
+                      }}>
+                        {call.quality_assessment?.charAt(0) || '?'}
                       </div>
-                      {row.count === 0 && <span className="dash-funnel-count">0</span>}
+                      
+                      {/* Info */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: '500', color: '#1f2937', fontSize: '14px' }}>
+                          {call.candidate_name || 'Unknown'}
+                        </div>
+                        <div style={{ 
+                          fontSize: '12px', 
+                          color: '#6b7280',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {call.call_summary?.substring(0, 50) || call.phone_e164}
+                        </div>
+                      </div>
+                      
+                      {/* Energy & Time */}
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ 
+                          fontWeight: '600', 
+                          color: getEnergyColor(call.energy_score),
+                          fontSize: '14px'
+                        }}>
+                          {call.energy_score || '-'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af' }}>
+                          {formatTime(call.call_time)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
-            
-            <div className="dash-metrics">
-              <div className="dash-metric">
-                <ProgressRing value={metrics.conversionRate} size={64} color="#10b981" />
-                <div className="dash-metric-info">
-                  <h4>Conversion Rate</h4>
-                  <p>Candidates to hires</p>
+          </div>
+
+          {/* Pipeline Summary */}
+          <div style={{ 
+            background: 'white', 
+            borderRadius: '12px', 
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            overflow: 'hidden'
+          }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e5e7eb' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                📊 Pipeline Summary
+              </h2>
+            </div>
+            <div style={{ padding: '16px 20px' }}>
+              {Object.entries(stats?.candidatesByStatus || {}).length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: '20px' }}>
+                  No candidates in pipeline
                 </div>
-              </div>
-              <div className="dash-metric">
-                <ProgressRing value={metrics.responseRate} size={64} color="#6366f1" />
-                <div className="dash-metric-info">
-                  <h4>Response Rate</h4>
-                  <p>Candidate replies</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {Object.entries(stats?.candidatesByStatus || {})
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 6)
+                    .map(([status, count]) => (
+                      <div key={status} style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ 
+                          width: '100px', 
+                          fontSize: '13px', 
+                          color: '#6b7280',
+                          textTransform: 'capitalize'
+                        }}>
+                          {status.replace(/_/g, ' ')}
+                        </div>
+                        <div style={{ 
+                          flex: 1, 
+                          height: '8px', 
+                          background: '#f3f4f6', 
+                          borderRadius: '4px',
+                          overflow: 'hidden'
+                        }}>
+                          <div style={{
+                            height: '100%',
+                            width: `${Math.min(100, (count / (stats?.totalCandidates || 1)) * 100)}%`,
+                            background: '#3b82f6',
+                            borderRadius: '4px'
+                          }} />
+                        </div>
+                        <div style={{ 
+                          width: '40px', 
+                          textAlign: 'right', 
+                          fontWeight: '600',
+                          fontSize: '13px',
+                          color: '#1f2937'
+                        }}>
+                          {count}
+                        </div>
+                      </div>
+                    ))}
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Urgent Actions */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">⚡ Needs Attention</span>
-          </div>
-          <div className="dash-panel-body">
-            {urgentActions.length === 0 ? (
-              <div className="dash-empty">
-                <div className="dash-empty-icon">✨</div>
-                <div className="dash-empty-text">All caught up! No urgent actions needed.</div>
-              </div>
-            ) : (
-              urgentActions.map((a, i) => (
-                <div key={i} className={`dash-urgent ${a.priority}`} onClick={a.action}>
-                  <span className="dash-urgent-icon">{a.icon}</span>
-                  <span className="dash-urgent-text">{a.text}</span>
-                  <span className="dash-urgent-arrow">→</span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Second Row */}
-      <div className="dash-section">
-        {/* Recent Candidates */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">👥 Recent Candidates</span>
-            <span className="dash-panel-link" onClick={() => onNavigate('candidates')}>View all →</span>
-          </div>
-          <div className="dash-panel-body" style={{ padding: '8px 12px' }}>
-            {recentCandidates.length === 0 ? (
-              <div className="dash-empty">
-                <div className="dash-empty-icon">👥</div>
-                <div className="dash-empty-text">No candidates yet</div>
-                <button className="dash-empty-btn" onClick={() => onNavigate('add-candidate')}>Add First Candidate</button>
-              </div>
-            ) : (
-              recentCandidates.map(c => (
-                <div key={c.id} className="dash-candidate" onClick={() => onNavigate('candidate', c)}>
-                  <Avatar name={c.name} size="md" />
-                  <div className="dash-candidate-info">
-                    <div className="dash-candidate-name">{c.name || 'Unknown'}</div>
-                    <div className="dash-candidate-role">{getRoles(c.roles)}</div>
-                  </div>
-                  <div className="dash-candidate-meta">
-                    <StatusBadge status={c.status} size="sm" />
-                    <span className="dash-candidate-date">{fmtDate(c.created_at)}</span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Quick Actions & Activity */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">🚀 Quick Actions</span>
-          </div>
-          <div className="dash-panel-body">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-              {[
-                { icon: '➕', label: 'Add Candidate', action: () => onNavigate('add-candidate'), color: '#eef2ff' },
-                { icon: '💼', label: 'Create Job', action: () => onNavigate('add-job'), color: '#ecfdf5' },
-                { icon: '📊', label: 'View Reports', action: () => onNavigate('reports'), color: '#fef3c7' },
-                { icon: '📅', label: 'Calendar', action: () => onNavigate('interviews'), color: '#f3e8ff' },
-              ].map((item, i) => (
-                <button
-                  key={i}
-                  onClick={item.action}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: 20,
-                    background: item.color,
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 12,
-                    cursor: 'pointer',
-                    transition: 'all .15s',
-                  }}
-                  onMouseOver={e => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,.08)'; }}
-                  onMouseOut={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = 'none'; }}
-                >
-                  <span style={{ fontSize: 24 }}>{item.icon}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>{item.label}</span>
-                </button>
-              ))}
+        {/* Right Column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          
+          {/* Top Candidates */}
+          <div style={{ 
+            background: 'white', 
+            borderRadius: '12px', 
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            overflow: 'hidden'
+          }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e5e7eb' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                ⭐ Top Candidates
+              </h2>
             </div>
+            <div style={{ padding: '8px' }}>
+              {topCandidates.length === 0 ? (
+                <div style={{ padding: '32px', textAlign: 'center', color: '#9ca3af' }}>
+                  No top candidates yet
+                </div>
+              ) : (
+                topCandidates.slice(0, 5).map(candidate => {
+                  const qualityColors = getQualityColor(candidate.quality_assessment);
+                  return (
+                    <div 
+                      key={candidate.id}
+                      style={{
+                        padding: '12px',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <div style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '8px',
+                        background: qualityColors.bg,
+                        color: qualityColors.text,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: '700',
+                        fontSize: '14px'
+                      }}>
+                        {candidate.quality_assessment?.charAt(0) || '?'}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: '500', color: '#1f2937', fontSize: '14px' }}>
+                          {candidate.candidate_name || 'Unknown'}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                          {(candidate.roles || []).slice(0, 2).join(', ') || 'No roles specified'}
+                        </div>
+                      </div>
+                      <div style={{ 
+                        fontWeight: '600', 
+                        color: getEnergyColor(candidate.energy_score),
+                        fontSize: '16px'
+                      }}>
+                        {candidate.energy_score || '-'}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div style={{ 
+            background: 'white', 
+            borderRadius: '12px', 
+            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+            overflow: 'hidden'
+          }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e5e7eb' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                🚀 Quick Actions
+              </h2>
+            </div>
+            <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <QuickActionButton icon="📞" label="Call History" color="#3b82f6" />
+              <QuickActionButton icon="👥" label="All Candidates" color="#22c55e" />
+              <QuickActionButton icon="📥" label="Import CSV" color="#8b5cf6" />
+              <QuickActionButton icon="💬" label="WhatsApp" color="#25d366" />
+            </div>
+          </div>
+
+          {/* Today's Tips */}
+          <div style={{ 
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+            borderRadius: '12px', 
+            padding: '20px',
+            color: 'white'
+          }}>
+            <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px', opacity: 0.9 }}>
+              💡 Recruiter Tip
+            </h3>
+            <p style={{ fontSize: '14px', lineHeight: '1.5', opacity: 0.95 }}>
+              {stats?.gradeACandidates && stats.gradeACandidates > 0
+                ? `You have ${stats.gradeACandidates} Grade A candidates ready to place! Review them in Call History.`
+                : 'Make sure to follow up with candidates within 24 hours of their call for best conversion rates.'}
+            </p>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function StatCard({ icon, label, value, subtext, color }: {
+  icon: string;
+  label: string;
+  value: number;
+  subtext: string;
+  color: string;
+}) {
+  return (
+    <div style={{
+      background: 'white',
+      borderRadius: '12px',
+      padding: '20px',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+      borderLeft: `4px solid ${color}`
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '20px' }}>{icon}</span>
+        <span style={{ fontSize: '13px', color: '#6b7280' }}>{label}</span>
+      </div>
+      <div style={{ fontSize: '32px', fontWeight: '700', color: '#1f2937' }}>
+        {value.toLocaleString()}
+      </div>
+      <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>
+        {subtext}
+      </div>
+    </div>
+  );
+}
+
+function QuickActionButton({ icon, label, color }: {
+  icon: string;
+  label: string;
+  color: string;
+}) {
+  return (
+    <button
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        padding: '12px 16px',
+        background: `${color}10`,
+        border: `1px solid ${color}30`,
+        borderRadius: '8px',
+        cursor: 'pointer',
+        transition: 'all 0.2s',
+        color: color,
+        fontWeight: '500',
+        fontSize: '14px'
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = `${color}20`;
+        e.currentTarget.style.transform = 'translateY(-1px)';
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = `${color}10`;
+        e.currentTarget.style.transform = 'translateY(0)';
+      }}
+    >
+      <span>{icon}</span>
+      <span>{label}</span>
+    </button>
   );
 }
