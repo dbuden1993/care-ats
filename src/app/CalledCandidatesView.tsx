@@ -1,5 +1,4 @@
 'use client';
-
 import React, { useEffect, useState } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -44,6 +43,8 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
   const [expandedCall, setExpandedCall] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'A' | 'B' | 'C' | 'D'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     fetchCallHistory();
@@ -51,20 +52,64 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
 
   async function fetchCallHistory() {
     setLoading(true);
-    
     const { data: callData, error: callError } = await supabase
       .from('call_history')
       .select('*')
       .order('call_time', { ascending: false })
       .limit(200);
-    
+
     if (callError) {
       console.error('Error fetching call history:', callError);
       setLoading(false);
       return;
     }
-    
+
     setCalls(callData || []);
+    setLoading(false);
+  }
+
+  async function deleteCall(callId: string) {
+    setDeleting(callId);
+    
+    const { error } = await supabase
+      .from('call_history')
+      .delete()
+      .eq('id', callId);
+
+    if (error) {
+      console.error('Error deleting call:', error);
+      alert('Failed to delete call: ' + error.message);
+    } else {
+      // Remove from local state
+      setCalls(calls.filter(c => c.id !== callId));
+    }
+    
+    setDeleting(null);
+    setDeleteConfirm(null);
+  }
+
+  async function deleteAllFiltered() {
+    const filteredCalls = getFilteredCalls();
+    if (filteredCalls.length === 0) return;
+    
+    const confirmed = window.confirm(`Are you sure you want to delete ${filteredCalls.length} call records? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setLoading(true);
+    const ids = filteredCalls.map(c => c.id);
+    
+    const { error } = await supabase
+      .from('call_history')
+      .delete()
+      .in('id', ids);
+
+    if (error) {
+      console.error('Error deleting calls:', error);
+      alert('Failed to delete calls: ' + error.message);
+    } else {
+      setCalls(calls.filter(c => !ids.includes(c.id)));
+    }
+    
     setLoading(false);
   }
 
@@ -92,350 +137,539 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-GB', { 
-      day: 'numeric', 
-      month: 'short', 
+    return date.toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
   };
 
-  const filteredCalls = calls.filter(call => {
-    // Quality filter
-    if (filter !== 'all') {
-      const quality = call.quality_assessment?.toUpperCase();
-      if (filter === 'A' && quality !== 'A' && quality !== 'HIGH') return false;
-      if (filter === 'B' && quality !== 'B') return false;
-      if (filter === 'C' && quality !== 'C' && quality !== 'MEDIUM') return false;
-      if (filter === 'D' && quality !== 'D' && quality !== 'F' && quality !== 'LOW') return false;
-    }
-    
-    // Search filter
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const nameMatch = call.candidate_name?.toLowerCase().includes(q);
-      const phoneMatch = call.phone_e164?.includes(q);
-      const summaryMatch = (typeof call.call_summary === 'string' ? call.call_summary : JSON.stringify(call.call_summary))?.toLowerCase().includes(q);
-      if (!nameMatch && !phoneMatch && !summaryMatch) return false;
-    }
-    
-    return true;
-  });
+  const formatDuration = (ms: number | null) => {
+    if (!ms) return '-';
+    const seconds = Math.floor(ms / 1000);
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const getFilteredCalls = () => {
+    return calls.filter(call => {
+      // Quality filter
+      if (filter !== 'all') {
+        const quality = call.quality_assessment?.toUpperCase();
+        if (quality !== filter) return false;
+      }
+
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesName = call.candidate_name?.toLowerCase().includes(query);
+        const matchesPhone = call.phone_e164?.includes(query);
+        const matchesSummary = call.call_summary?.toLowerCase().includes(query);
+        if (!matchesName && !matchesPhone && !matchesSummary) return false;
+      }
+
+      return true;
+    });
+  };
+
+  const filteredCalls = getFilteredCalls();
 
   const stats = {
     total: calls.length,
     gradeA: calls.filter(c => c.quality_assessment?.toUpperCase() === 'A' || c.quality_assessment?.toUpperCase() === 'HIGH').length,
     gradeB: calls.filter(c => c.quality_assessment?.toUpperCase() === 'B').length,
     gradeC: calls.filter(c => c.quality_assessment?.toUpperCase() === 'C' || c.quality_assessment?.toUpperCase() === 'MEDIUM').length,
-    gradeD: calls.filter(c => ['D', 'F', 'LOW'].includes(c.quality_assessment?.toUpperCase() || '')).length,
+    gradeD: calls.filter(c => c.quality_assessment?.toUpperCase() === 'D' || c.quality_assessment?.toUpperCase() === 'F' || c.quality_assessment?.toUpperCase() === 'LOW').length,
   };
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 300 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: '#6b7280' }}>
-          <div style={{ width: 24, height: 24, border: '3px solid #e5e7eb', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-          Loading call history...
-        </div>
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={{ padding: '40px', textAlign: 'center' }}>
+        <div style={{ fontSize: '24px', marginBottom: '10px' }}>📞</div>
+        <div style={{ color: '#6b7280' }}>Loading call history...</div>
       </div>
     );
   }
 
   return (
-    <div>
+    <div style={{ padding: '20px' }}>
       {/* Stats Bar */}
-      <div style={{ display: 'flex', gap: 12, padding: '16px 24px', background: '#fff', borderBottom: '1px solid #e5e7eb', overflowX: 'auto' }}>
-        {[
-          { k: 'all', v: stats.total, l: 'Total Calls', c: '#6366f1' },
-          { k: 'A', v: stats.gradeA, l: 'Grade A', c: '#22c55e' },
-          { k: 'B', v: stats.gradeB, l: 'Grade B', c: '#3b82f6' },
-          { k: 'C', v: stats.gradeC, l: 'Grade C', c: '#eab308' },
-          { k: 'D', v: stats.gradeD, l: 'Grade D/F', c: '#ef4444' },
-        ].map(s => (
-          <div
-            key={s.k}
-            onClick={() => setFilter(s.k as any)}
-            style={{
-              background: filter === s.k ? '#eef2ff' : '#f9fafb',
-              borderRadius: 12,
-              padding: '14px 20px',
-              cursor: 'pointer',
-              transition: 'all .15s',
-              border: filter === s.k ? '2px solid #6366f1' : '2px solid transparent',
-              minWidth: 100,
-              textAlign: 'center'
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 800, color: s.c }}>{s.v}</div>
-            <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2, textTransform: 'uppercase', fontWeight: 600, letterSpacing: 0.5 }}>{s.l}</div>
-          </div>
-        ))}
+      <div style={{ 
+        display: 'flex', 
+        gap: '16px', 
+        marginBottom: '20px',
+        flexWrap: 'wrap'
+      }}>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: 'white', 
+          borderRadius: '12px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+          minWidth: '120px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>{stats.total}</div>
+          <div style={{ fontSize: '13px', color: '#6b7280' }}>Total Calls</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#dcfce7', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#166534' }}>{stats.gradeA}</div>
+          <div style={{ fontSize: '13px', color: '#166534' }}>Grade A</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#dbeafe', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#1e40af' }}>{stats.gradeB}</div>
+          <div style={{ fontSize: '13px', color: '#1e40af' }}>Grade B</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#fef9c3', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#854d0e' }}>{stats.gradeC}</div>
+          <div style={{ fontSize: '13px', color: '#854d0e' }}>Grade C</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#fee2e2', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#991b1b' }}>{stats.gradeD}</div>
+          <div style={{ fontSize: '13px', color: '#991b1b' }}>Grade D/F</div>
+        </div>
       </div>
 
-      {/* Search */}
-      <div style={{ padding: '12px 24px', background: '#fafbfc', borderBottom: '1px solid #e5e7eb' }}>
+      {/* Filters and Search */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '12px', 
+        marginBottom: '20px',
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }}>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {(['all', 'A', 'B', 'C', 'D'] as const).map(grade => (
+            <button
+              key={grade}
+              onClick={() => setFilter(grade)}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: 'none',
+                background: filter === grade ? '#3b82f6' : '#f3f4f6',
+                color: filter === grade ? 'white' : '#374151',
+                cursor: 'pointer',
+                fontWeight: filter === grade ? '600' : '400',
+                transition: 'all 0.2s'
+              }}
+            >
+              {grade === 'all' ? 'All' : `Grade ${grade}`}
+            </button>
+          ))}
+        </div>
+
         <input
           type="text"
           placeholder="Search by name, phone, or summary..."
           value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
+          onChange={(e) => setSearchQuery(e.target.value)}
           style={{
-            width: '100%',
-            maxWidth: 400,
-            padding: '10px 14px',
-            fontSize: 13,
-            border: '1px solid #e5e7eb',
-            borderRadius: 8,
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: '1px solid #d1d5db',
+            width: '300px',
             outline: 'none'
           }}
         />
+
+        <button
+          onClick={fetchCallHistory}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: 'none',
+            background: '#f3f4f6',
+            color: '#374151',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          🔄 Refresh
+        </button>
+
+        {filteredCalls.length > 0 && (
+          <button
+            onClick={deleteAllFiltered}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              border: 'none',
+              background: '#fee2e2',
+              color: '#991b1b',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              marginLeft: 'auto'
+            }}
+          >
+            🗑️ Delete {filter !== 'all' || searchQuery ? `${filteredCalls.length} Filtered` : 'All'}
+          </button>
+        )}
+      </div>
+
+      {/* Results count */}
+      <div style={{ marginBottom: '16px', color: '#6b7280', fontSize: '14px' }}>
+        Showing {filteredCalls.length} of {calls.length} calls
       </div>
 
       {/* Call List */}
-      <div style={{ padding: 24 }}>
-        {filteredCalls.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 48, color: '#6b7280' }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>📞</div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>No calls found</div>
-            <div style={{ fontSize: 14, marginTop: 4 }}>Process some recordings to see AI analysis here</div>
+      {filteredCalls.length === 0 ? (
+        <div style={{ 
+          padding: '60px', 
+          textAlign: 'center',
+          background: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📞</div>
+          <div style={{ fontSize: '18px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+            No calls found
           </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {filteredCalls.map(call => {
-              const qualityColor = getQualityColor(call.quality_assessment);
-              const isExpanded = expandedCall === call.id;
-              
-              return (
+          <div style={{ color: '#6b7280' }}>
+            {searchQuery || filter !== 'all' 
+              ? 'Try adjusting your filters'
+              : 'Call recordings will appear here after being processed'}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {filteredCalls.map(call => {
+            const qualityColors = getQualityColor(call.quality_assessment);
+            const isExpanded = expandedCall === call.id;
+            const isDeleting = deleting === call.id;
+            const showDeleteConfirm = deleteConfirm === call.id;
+
+            return (
+              <div
+                key={call.id}
+                style={{
+                  background: 'white',
+                  borderRadius: '12px',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                  overflow: 'hidden',
+                  opacity: isDeleting ? 0.5 : 1,
+                  transition: 'opacity 0.2s'
+                }}
+              >
+                {/* Call Header */}
                 <div
-                  key={call.id}
+                  onClick={() => !showDeleteConfirm && setExpandedCall(isExpanded ? null : call.id)}
                   style={{
-                    background: '#fff',
-                    borderRadius: 12,
-                    border: '1px solid #e5e7eb',
-                    overflow: 'hidden',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                    padding: '16px 20px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '16px',
+                    borderBottom: isExpanded ? '1px solid #e5e7eb' : 'none'
                   }}
                 >
-                  {/* Call Header */}
-                  <div
-                    onClick={() => setExpandedCall(isExpanded ? null : call.id)}
-                    style={{
-                      padding: 16,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 16,
-                      transition: 'background .15s'
-                    }}
-                  >
-                    {/* Quality Badge */}
-                    <div style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: '50%',
-                      background: qualityColor.bg,
-                      border: `2px solid ${qualityColor.border}`,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 700,
-                      fontSize: 18,
-                      color: qualityColor.text,
-                      flexShrink: 0
-                    }}>
-                      {call.quality_assessment?.charAt(0) || '?'}
+                  {/* Quality Badge */}
+                  <div style={{
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: qualityColors.bg,
+                    color: qualityColors.text,
+                    fontWeight: '700',
+                    fontSize: '14px',
+                    minWidth: '45px',
+                    textAlign: 'center'
+                  }}>
+                    {call.quality_assessment?.toUpperCase() || '-'}
+                  </div>
+
+                  {/* Name & Phone */}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: '600', color: '#1f2937', fontSize: '15px' }}>
+                      {call.candidate_name || 'Unknown Candidate'}
                     </div>
-
-                    {/* Info */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: 16, color: '#111' }}>
-                        {call.candidate_name || 'Unknown Candidate'}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: '#6b7280', marginTop: 4 }}>
-                        <span>📞 {call.phone_e164}</span>
-                        <span>🕐 {formatDate(call.call_time)}</span>
-                        {call.call_type && <span style={{ background: '#f3f4f6', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>{call.call_type}</span>}
-                      </div>
-                    </div>
-
-                    {/* Energy Score */}
-                    <div style={{ textAlign: 'center', marginRight: 16 }}>
-                      <div style={{ fontSize: 24, fontWeight: 800, color: getEnergyColor(call.energy_score) }}>
-                        {call.energy_score || '-'}<span style={{ fontSize: 14, fontWeight: 400 }}>/10</span>
-                      </div>
-                      <div style={{ fontSize: 10, color: '#9ca3af', fontWeight: 500 }}>ENERGY</div>
-                    </div>
-
-                    {/* Roles */}
-                    {call.roles && call.roles.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: 200 }}>
-                        {call.roles.slice(0, 3).map((role, i) => (
-                          <span key={i} style={{ padding: '4px 8px', background: '#eef2ff', color: '#4f46e5', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
-                            {role}
-                          </span>
-                        ))}
-                        {call.roles.length > 3 && (
-                          <span style={{ padding: '4px 8px', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, fontSize: 11 }}>
-                            +{call.roles.length - 3}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Expand Icon */}
-                    <div style={{ color: '#9ca3af', fontSize: 18 }}>
-                      {isExpanded ? '▲' : '▼'}
+                    <div style={{ color: '#6b7280', fontSize: '13px' }}>
+                      {call.phone_e164} • {formatDate(call.call_time)}
                     </div>
                   </div>
 
-                  {/* Call Summary (always visible) */}
-                  {call.call_summary && (
-                    <div style={{ padding: '0 16px 16px', fontSize: 14, color: '#4b5563', lineHeight: 1.5 }}>
-                      {typeof call.call_summary === 'string' 
-                        ? call.call_summary.slice(0, 200) + (call.call_summary.length > 200 ? '...' : '')
-                        : JSON.stringify(call.call_summary).slice(0, 200)}
+                  {/* Energy Score */}
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ 
+                      fontSize: '20px', 
+                      fontWeight: '700',
+                      color: getEnergyColor(call.energy_score)
+                    }}>
+                      {call.energy_score || '-'}
                     </div>
-                  )}
+                    <div style={{ fontSize: '11px', color: '#9ca3af' }}>Energy</div>
+                  </div>
 
-                  {/* Expanded Details */}
-                  {isExpanded && (
-                    <div style={{ borderTop: '1px solid #e5e7eb', padding: 16, background: '#fafbfc' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-                        
-                        {/* Experience */}
-                        {call.experience_summary && (
-                          <div style={{ background: '#fff', padding: 16, borderRadius: 8, border: '1px solid #e5e7eb' }}>
-                            <h4 style={{ fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                              🎓 Experience
-                            </h4>
-                            <p style={{ fontSize: 13, color: '#4b5563', lineHeight: 1.5 }}>
-                              {typeof call.experience_summary === 'string' 
-                                ? call.experience_summary 
-                                : JSON.stringify(call.experience_summary)}
-                            </p>
-                          </div>
-                        )}
+                  {/* Roles */}
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: '6px',
+                    flexWrap: 'wrap',
+                    maxWidth: '200px'
+                  }}>
+                    {(call.roles || []).slice(0, 2).map((role, i) => (
+                      <span key={i} style={{
+                        padding: '4px 8px',
+                        background: '#f3f4f6',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        color: '#4b5563'
+                      }}>
+                        {role}
+                      </span>
+                    ))}
+                  </div>
 
-                        {/* Compliance */}
-                        <div style={{ background: '#fff', padding: 16, borderRadius: 8, border: '1px solid #e5e7eb' }}>
-                          <h4 style={{ fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                            ✅ Compliance
-                          </h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#6b7280' }}>DBS Status:</span>
-                              <span style={{ fontWeight: 500 }}>{call.dbs_status || 'Unknown'}</span>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#6b7280' }}>Driver:</span>
-                              <span style={{ fontWeight: 500 }}>{call.driver === 'Yes' ? '✅ Yes' : call.driver === 'No' ? '❌ No' : 'Unknown'}</span>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#6b7280' }}>Training:</span>
-                              <span style={{ fontWeight: 500 }}>{call.mandatory_training || 'Unknown'}</span>
-                            </div>
-                          </div>
+                  {/* Delete Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteConfirm(showDeleteConfirm ? null : call.id);
+                    }}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      background: showDeleteConfirm ? '#fee2e2' : '#f3f4f6',
+                      color: showDeleteConfirm ? '#991b1b' : '#6b7280',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    🗑️
+                  </button>
+
+                  {/* Expand Arrow */}
+                  <div style={{ 
+                    color: '#9ca3af',
+                    transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s'
+                  }}>
+                    ▼
+                  </div>
+                </div>
+
+                {/* Delete Confirmation */}
+                {showDeleteConfirm && (
+                  <div style={{
+                    padding: '12px 20px',
+                    background: '#fef2f2',
+                    borderBottom: '1px solid #fecaca',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px'
+                  }}>
+                    <span style={{ color: '#991b1b', fontSize: '14px' }}>
+                      Delete this call record?
+                    </span>
+                    <button
+                      onClick={() => deleteCall(call.id)}
+                      disabled={isDeleting}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: '#dc2626',
+                        color: 'white',
+                        cursor: isDeleting ? 'not-allowed' : 'pointer',
+                        fontSize: '13px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      {isDeleting ? 'Deleting...' : 'Yes, Delete'}
+                    </button>
+                    <button
+                      onClick={() => setDeleteConfirm(null)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        background: 'white',
+                        color: '#374151',
+                        cursor: 'pointer',
+                        fontSize: '13px'
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
+                {/* Summary Preview */}
+                {!isExpanded && call.call_summary && (
+                  <div style={{ 
+                    padding: '0 20px 16px 20px',
+                    color: '#6b7280',
+                    fontSize: '13px',
+                    lineHeight: '1.5'
+                  }}>
+                    {call.call_summary.substring(0, 150)}
+                    {call.call_summary.length > 150 ? '...' : ''}
+                  </div>
+                )}
+
+                {/* Expanded Content */}
+                {isExpanded && (
+                  <div style={{ padding: '20px' }}>
+                    {/* Summary */}
+                    {call.call_summary && (
+                      <div style={{ marginBottom: '20px' }}>
+                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                          📝 Call Summary
                         </div>
-
-                        {/* Availability */}
-                        <div style={{ background: '#fff', padding: 16, borderRadius: 8, border: '1px solid #e5e7eb' }}>
-                          <h4 style={{ fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                            📅 Availability
-                          </h4>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#6b7280' }}>Start Date:</span>
-                              <span style={{ fontWeight: 500 }}>
-                                {call.earliest_start_date 
-                                  ? new Date(call.earliest_start_date).toLocaleDateString('en-GB')
-                                  : 'Not specified'}
-                              </span>
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#6b7280' }}>Hours:</span>
-                              <span style={{ fontWeight: 500 }}>{call.weekly_rota || 'Not specified'}</span>
-                            </div>
-                          </div>
+                        <div style={{ 
+                          color: '#4b5563', 
+                          lineHeight: '1.6',
+                          background: '#f9fafb',
+                          padding: '12px',
+                          borderRadius: '8px'
+                        }}>
+                          {call.call_summary}
                         </div>
-
-                        {/* Follow-up Actions */}
-                        {call.follow_up_questions && call.follow_up_questions.length > 0 && (
-                          <div style={{ background: '#fff', padding: 16, borderRadius: 8, border: '1px solid #e5e7eb', gridColumn: 'span 2' }}>
-                            <h4 style={{ fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                              📋 Follow-up Actions
-                            </h4>
-                            <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: '#4b5563' }}>
-                              {call.follow_up_questions.map((action, i) => (
-                                <li key={i} style={{ marginBottom: 4 }}>
-                                  {typeof action === 'string' ? action : JSON.stringify(action)}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                        {/* Transcript */}
-                        {call.transcript && (
-                          <div style={{ background: '#fff', padding: 16, borderRadius: 8, border: '1px solid #e5e7eb', gridColumn: '1 / -1' }}>
-                            <h4 style={{ fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                              📝 Transcript
-                            </h4>
-                            <div style={{ 
-                              maxHeight: 200, 
-                              overflowY: 'auto', 
-                              fontSize: 12, 
-                              color: '#4b5563', 
-                              whiteSpace: 'pre-wrap', 
-                              background: '#f9fafb', 
-                              padding: 12, 
-                              borderRadius: 6,
-                              fontFamily: 'monospace',
-                              lineHeight: 1.6
-                            }}>
-                              {typeof call.transcript === 'string' 
-                                ? call.transcript 
-                                : JSON.stringify(call.transcript, null, 2)}
-                            </div>
-                          </div>
-                        )}
                       </div>
+                    )}
 
-                      {/* Link to Candidate */}
-                      {call.candidate_id && onSelectCandidate && (
-                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSelectCandidate({ id: call.candidate_id, name: call.candidate_name, phone_e164: call.phone_e164 });
-                            }}
-                            style={{
-                              padding: '10px 16px',
-                              background: 'linear-gradient(135deg, #4f46e5, #6366f1)',
-                              color: '#fff',
-                              border: 'none',
-                              borderRadius: 8,
-                              fontWeight: 600,
-                              fontSize: 13,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8
-                            }}
-                          >
-                            👤 View Full Candidate Profile →
-                          </button>
+                    {/* Details Grid */}
+                    <div style={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                      gap: '16px',
+                      marginBottom: '20px'
+                    }}>
+                      {call.experience_summary && (
+                        <div style={{ 
+                          padding: '12px',
+                          background: '#f0f9ff',
+                          borderRadius: '8px'
+                        }}>
+                          <div style={{ fontWeight: '600', color: '#0369a1', marginBottom: '4px', fontSize: '13px' }}>
+                            💼 Experience
+                          </div>
+                          <div style={{ color: '#0c4a6e', fontSize: '14px' }}>
+                            {call.experience_summary}
+                          </div>
                         </div>
                       )}
+
+                      <div style={{ 
+                        padding: '12px',
+                        background: '#f0fdf4',
+                        borderRadius: '8px'
+                      }}>
+                        <div style={{ fontWeight: '600', color: '#166534', marginBottom: '4px', fontSize: '13px' }}>
+                          ✅ Compliance
+                        </div>
+                        <div style={{ color: '#14532d', fontSize: '14px' }}>
+                          <div>DBS: {call.dbs_status || 'Not discussed'}</div>
+                          <div>Driver: {call.driver || 'Not discussed'}</div>
+                          <div>Training: {call.mandatory_training || 'Not discussed'}</div>
+                        </div>
+                      </div>
+
+                      <div style={{ 
+                        padding: '12px',
+                        background: '#faf5ff',
+                        borderRadius: '8px'
+                      }}>
+                        <div style={{ fontWeight: '600', color: '#7c3aed', marginBottom: '4px', fontSize: '13px' }}>
+                          📅 Availability
+                        </div>
+                        <div style={{ color: '#581c87', fontSize: '14px' }}>
+                          <div>Start: {call.earliest_start_date || 'Not discussed'}</div>
+                          <div>Hours: {call.weekly_rota || 'Not discussed'}</div>
+                        </div>
+                      </div>
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+
+                    {/* Follow-up Actions */}
+                    {call.follow_up_questions && call.follow_up_questions.length > 0 && (
+                      <div style={{ marginBottom: '20px' }}>
+                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                          🎯 Follow-up Actions
+                        </div>
+                        <ul style={{ 
+                          margin: 0, 
+                          paddingLeft: '20px',
+                          color: '#4b5563'
+                        }}>
+                          {call.follow_up_questions.map((action, i) => (
+                            <li key={i} style={{ marginBottom: '4px' }}>{action}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Transcript */}
+                    {call.transcript && (
+                      <div>
+                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                          📜 Full Transcript
+                        </div>
+                        <div style={{ 
+                          color: '#4b5563', 
+                          lineHeight: '1.6',
+                          background: '#f9fafb',
+                          padding: '12px',
+                          borderRadius: '8px',
+                          maxHeight: '300px',
+                          overflowY: 'auto',
+                          fontSize: '13px',
+                          whiteSpace: 'pre-wrap'
+                        }}>
+                          {call.transcript}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* View Candidate Button */}
+                    {onSelectCandidate && call.candidate_id && (
+                      <button
+                        onClick={() => onSelectCandidate({ id: call.candidate_id })}
+                        style={{
+                          marginTop: '16px',
+                          padding: '10px 20px',
+                          background: '#3b82f6',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '500'
+                        }}
+                      >
+                        View Full Candidate Profile →
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
