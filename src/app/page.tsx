@@ -383,7 +383,7 @@ function Dashboard() {
         </div>
 
         {section === 'dashboard' && (
-          <DashboardView candidates={candidates} jobs={jobs} onNavigate={handleNavigate} />
+          <DashboardView />
         )}
         
         {section === 'whatsapp' && (
