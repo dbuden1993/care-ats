@@ -45,6 +45,9 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [editingCall, setEditingCall] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<any>({});
+  const [activeTab, setActiveTab] = useState<'graded' | 'unprocessed'>('graded');
 
   useEffect(() => {
     fetchCallHistory();
@@ -56,7 +59,7 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
       .from('call_history')
       .select('*')
       .order('call_time', { ascending: false })
-      .limit(200);
+      .limit(500);
 
     if (callError) {
       console.error('Error fetching call history:', callError);
@@ -80,7 +83,6 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
       console.error('Error deleting call:', error);
       alert('Failed to delete call: ' + error.message);
     } else {
-      // Remove from local state
       setCalls(calls.filter(c => c.id !== callId));
     }
     
@@ -112,6 +114,32 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
     
     setLoading(false);
   }
+
+  async function updateCall(callId: string, updates: Partial<CallHistoryRecord>) {
+    const { error } = await supabase
+      .from('call_history')
+      .update(updates)
+      .eq('id', callId);
+
+    if (error) {
+      console.error('Error updating call:', error);
+      alert('Failed to update: ' + error.message);
+    } else {
+      setCalls(calls.map(c => c.id === callId ? { ...c, ...updates } : c));
+      setEditingCall(null);
+      setEditForm({});
+    }
+  }
+
+  const isUnprocessed = (call: CallHistoryRecord) => {
+    return !call.candidate_name || 
+           call.candidate_name === 'Unknown' || 
+           call.candidate_name === 'Unknown Candidate' ||
+           call.candidate_name?.toLowerCase().includes('unknown');
+  };
+
+  const gradedCalls = calls.filter(c => !isUnprocessed(c));
+  const unprocessedCalls = calls.filter(c => isUnprocessed(c));
 
   const getQualityColor = (quality: string | null) => {
     const q = quality?.toUpperCase();
@@ -146,18 +174,20 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
     });
   };
 
-  const formatDuration = (ms: number | null) => {
-    if (!ms) return '-';
-    const seconds = Math.floor(ms / 1000);
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const formatPhone = (phone: string) => {
+    if (!phone) return '';
+    if (phone.startsWith('+44')) {
+      return phone.replace('+44', '0').replace(/(\d{5})(\d{6})/, '$1 $2');
+    }
+    return phone;
   };
 
   const getFilteredCalls = () => {
-    return calls.filter(call => {
-      // Quality filter
-      if (filter !== 'all') {
+    const baseCalls = activeTab === 'graded' ? gradedCalls : unprocessedCalls;
+    
+    return baseCalls.filter(call => {
+      // Quality filter (only for graded tab)
+      if (activeTab === 'graded' && filter !== 'all') {
         const quality = call.quality_assessment?.toUpperCase();
         if (quality !== filter) return false;
       }
@@ -178,11 +208,12 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
   const filteredCalls = getFilteredCalls();
 
   const stats = {
-    total: calls.length,
-    gradeA: calls.filter(c => c.quality_assessment?.toUpperCase() === 'A' || c.quality_assessment?.toUpperCase() === 'HIGH').length,
-    gradeB: calls.filter(c => c.quality_assessment?.toUpperCase() === 'B').length,
-    gradeC: calls.filter(c => c.quality_assessment?.toUpperCase() === 'C' || c.quality_assessment?.toUpperCase() === 'MEDIUM').length,
-    gradeD: calls.filter(c => c.quality_assessment?.toUpperCase() === 'D' || c.quality_assessment?.toUpperCase() === 'F' || c.quality_assessment?.toUpperCase() === 'LOW').length,
+    total: gradedCalls.length,
+    gradeA: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'A' || c.quality_assessment?.toUpperCase() === 'HIGH').length,
+    gradeB: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'B').length,
+    gradeC: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'C' || c.quality_assessment?.toUpperCase() === 'MEDIUM').length,
+    gradeD: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'D' || c.quality_assessment?.toUpperCase() === 'F' || c.quality_assessment?.toUpperCase() === 'LOW').length,
+    unprocessed: unprocessedCalls.length
   };
 
   if (loading) {
@@ -211,7 +242,7 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
           minWidth: '120px'
         }}>
           <div style={{ fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>{stats.total}</div>
-          <div style={{ fontSize: '13px', color: '#6b7280' }}>Total Calls</div>
+          <div style={{ fontSize: '13px', color: '#6b7280' }}>Graded Calls</div>
         </div>
         <div style={{ 
           padding: '16px 24px', 
@@ -249,6 +280,86 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
           <div style={{ fontSize: '28px', fontWeight: '700', color: '#991b1b' }}>{stats.gradeD}</div>
           <div style={{ fontSize: '13px', color: '#991b1b' }}>Grade D/F</div>
         </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: stats.unprocessed > 0 ? '#fef3c7' : '#f3f4f6', 
+          borderRadius: '12px',
+          minWidth: '100px',
+          border: stats.unprocessed > 0 ? '2px solid #f59e0b' : 'none'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: stats.unprocessed > 0 ? '#d97706' : '#6b7280' }}>
+            {stats.unprocessed}
+          </div>
+          <div style={{ fontSize: '13px', color: stats.unprocessed > 0 ? '#d97706' : '#6b7280' }}>Unprocessed</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '4px', 
+        marginBottom: '20px',
+        background: '#f3f4f6',
+        padding: '4px',
+        borderRadius: '12px',
+        width: 'fit-content'
+      }}>
+        <button
+          onClick={() => { setActiveTab('graded'); setFilter('all'); }}
+          style={{
+            padding: '10px 20px',
+            borderRadius: '8px',
+            border: 'none',
+            background: activeTab === 'graded' ? 'white' : 'transparent',
+            color: activeTab === 'graded' ? '#1f2937' : '#6b7280',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'graded' ? '600' : '400',
+            boxShadow: activeTab === 'graded' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}
+        >
+          ✅ Graded
+          <span style={{
+            background: '#e5e7eb',
+            padding: '2px 8px',
+            borderRadius: '12px',
+            fontSize: '12px'
+          }}>
+            {stats.total}
+          </span>
+        </button>
+        <button
+          onClick={() => { setActiveTab('unprocessed'); setFilter('all'); }}
+          style={{
+            padding: '10px 20px',
+            borderRadius: '8px',
+            border: 'none',
+            background: activeTab === 'unprocessed' ? 'white' : 'transparent',
+            color: activeTab === 'unprocessed' ? '#d97706' : '#6b7280',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'unprocessed' ? '600' : '400',
+            boxShadow: activeTab === 'unprocessed' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}
+        >
+          ⏳ Unprocessed
+          {stats.unprocessed > 0 && (
+            <span style={{
+              background: '#fef3c7',
+              color: '#d97706',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              fontSize: '12px',
+              fontWeight: '600'
+            }}>
+              {stats.unprocessed}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Filters and Search */}
@@ -259,26 +370,28 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
         flexWrap: 'wrap',
         alignItems: 'center'
       }}>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {(['all', 'A', 'B', 'C', 'D'] as const).map(grade => (
-            <button
-              key={grade}
-              onClick={() => setFilter(grade)}
-              style={{
-                padding: '8px 16px',
-                borderRadius: '8px',
-                border: 'none',
-                background: filter === grade ? '#3b82f6' : '#f3f4f6',
-                color: filter === grade ? 'white' : '#374151',
-                cursor: 'pointer',
-                fontWeight: filter === grade ? '600' : '400',
-                transition: 'all 0.2s'
-              }}
-            >
-              {grade === 'all' ? 'All' : `Grade ${grade}`}
-            </button>
-          ))}
-        </div>
+        {activeTab === 'graded' && (
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {(['all', 'A', 'B', 'C', 'D'] as const).map(grade => (
+              <button
+                key={grade}
+                onClick={() => setFilter(grade)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: filter === grade ? '#3b82f6' : '#f3f4f6',
+                  color: filter === grade ? 'white' : '#374151',
+                  cursor: 'pointer',
+                  fontWeight: filter === grade ? '600' : '400',
+                  transition: 'all 0.2s'
+                }}
+              >
+                {grade === 'all' ? 'All' : `Grade ${grade}`}
+              </button>
+            ))}
+          </div>
+        )}
 
         <input
           type="text"
@@ -327,14 +440,14 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
               marginLeft: 'auto'
             }}
           >
-            🗑️ Delete {filter !== 'all' || searchQuery ? `${filteredCalls.length} Filtered` : 'All'}
+            🗑️ Delete {activeTab === 'unprocessed' ? 'All Unprocessed' : (filter !== 'all' || searchQuery ? `${filteredCalls.length} Filtered` : 'All')}
           </button>
         )}
       </div>
 
       {/* Results count */}
       <div style={{ marginBottom: '16px', color: '#6b7280', fontSize: '14px' }}>
-        Showing {filteredCalls.length} of {calls.length} calls
+        Showing {filteredCalls.length} {activeTab === 'graded' ? 'graded' : 'unprocessed'} calls
       </div>
 
       {/* Call List */}
@@ -346,14 +459,18 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
           borderRadius: '12px',
           boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
         }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📞</div>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>
+            {activeTab === 'graded' ? '📞' : '🎉'}
+          </div>
           <div style={{ fontSize: '18px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
-            No calls found
+            {activeTab === 'graded' 
+              ? 'No graded calls found'
+              : 'No unprocessed calls!'}
           </div>
           <div style={{ color: '#6b7280' }}>
-            {searchQuery || filter !== 'all' 
-              ? 'Try adjusting your filters'
-              : 'Call recordings will appear here after being processed'}
+            {activeTab === 'graded'
+              ? (searchQuery || filter !== 'all' ? 'Try adjusting your filters' : 'Call recordings will appear here after being processed')
+              : 'All calls have been reviewed and graded'}
           </div>
         </div>
       ) : (
@@ -363,6 +480,7 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
             const isExpanded = expandedCall === call.id;
             const isDeleting = deleting === call.id;
             const showDeleteConfirm = deleteConfirm === call.id;
+            const isEditing = editingCall === call.id;
 
             return (
               <div
@@ -373,12 +491,13 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
                   boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
                   overflow: 'hidden',
                   opacity: isDeleting ? 0.5 : 1,
-                  transition: 'opacity 0.2s'
+                  transition: 'opacity 0.2s',
+                  borderLeft: activeTab === 'unprocessed' ? '4px solid #f59e0b' : 'none'
                 }}
               >
                 {/* Call Header */}
                 <div
-                  onClick={() => !showDeleteConfirm && setExpandedCall(isExpanded ? null : call.id)}
+                  onClick={() => !showDeleteConfirm && !isEditing && setExpandedCall(isExpanded ? null : call.id)}
                   style={{
                     padding: '16px 20px',
                     cursor: 'pointer',
@@ -408,7 +527,7 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
                       {call.candidate_name || 'Unknown Candidate'}
                     </div>
                     <div style={{ color: '#6b7280', fontSize: '13px' }}>
-                      {call.phone_e164} • {formatDate(call.call_time)}
+                      {formatPhone(call.phone_e164)} • {formatDate(call.call_time)}
                     </div>
                   </div>
 
@@ -444,6 +563,34 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
                     ))}
                   </div>
 
+                  {/* Edit Button (for unprocessed) */}
+                  {activeTab === 'unprocessed' && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingCall(call.id);
+                        setEditForm({
+                          candidate_name: call.candidate_name || '',
+                          quality_assessment: call.quality_assessment || 'C',
+                          energy_score: call.energy_score || 5,
+                          call_summary: call.call_summary || ''
+                        });
+                      }}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: '#3b82f6',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      ✏️ Grade
+                    </button>
+                  )}
+
                   {/* Delete Button */}
                   <button
                     onClick={(e) => {
@@ -472,6 +619,130 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
                     ▼
                   </div>
                 </div>
+
+                {/* Edit Form */}
+                {isEditing && (
+                  <div style={{
+                    padding: '20px',
+                    background: '#f9fafb',
+                    borderBottom: '1px solid #e5e7eb'
+                  }}>
+                    <h4 style={{ marginBottom: '16px', color: '#1f2937' }}>Grade this call</h4>
+                    
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                          Candidate Name
+                        </label>
+                        <input
+                          type="text"
+                          value={editForm.candidate_name}
+                          onChange={(e) => setEditForm({ ...editForm, candidate_name: e.target.value })}
+                          placeholder="Enter candidate name"
+                          style={{
+                            width: '100%',
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid #d1d5db',
+                            fontSize: '14px'
+                          }}
+                        />
+                      </div>
+                      
+                      <div>
+                        <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                          Quality Grade
+                        </label>
+                        <select
+                          value={editForm.quality_assessment}
+                          onChange={(e) => setEditForm({ ...editForm, quality_assessment: e.target.value })}
+                          style={{
+                            width: '100%',
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid #d1d5db',
+                            fontSize: '14px'
+                          }}
+                        >
+                          <option value="A">A - Excellent (Ready to place)</option>
+                          <option value="B">B - Good (Proceed)</option>
+                          <option value="C">C - Average (With reservations)</option>
+                          <option value="D">D - Below standard</option>
+                          <option value="F">F - Not suitable</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                          Energy Score (1-10)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={editForm.energy_score}
+                          onChange={(e) => setEditForm({ ...editForm, energy_score: parseInt(e.target.value) || 5 })}
+                          style={{
+                            width: '100%',
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid #d1d5db',
+                            fontSize: '14px'
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                        Call Summary
+                      </label>
+                      <textarea
+                        value={editForm.call_summary}
+                        onChange={(e) => setEditForm({ ...editForm, call_summary: e.target.value })}
+                        placeholder="Brief summary of the call..."
+                        rows={3}
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid #d1d5db',
+                          fontSize: '14px',
+                          resize: 'vertical'
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => updateCall(call.id, editForm)}
+                        style={{
+                          padding: '10px 20px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          background: '#22c55e',
+                          color: 'white',
+                          cursor: 'pointer',
+                          fontWeight: '500'
+                        }}
+                      >
+                        ✓ Save & Grade
+                      </button>
+                      <button
+                        onClick={() => { setEditingCall(null); setEditForm({}); }}
+                        style={{
+                          padding: '10px 20px',
+                          borderRadius: '8px',
+                          border: '1px solid #d1d5db',
+                          background: 'white',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Delete Confirmation */}
                 {showDeleteConfirm && (
@@ -520,7 +791,7 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
                 )}
 
                 {/* Summary Preview */}
-                {!isExpanded && call.call_summary && (
+                {!isExpanded && !isEditing && call.call_summary && (
                   <div style={{ 
                     padding: '0 20px 16px 20px',
                     color: '#6b7280',
@@ -533,7 +804,7 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
                 )}
 
                 {/* Expanded Content */}
-                {isExpanded && (
+                {isExpanded && !isEditing && (
                   <div style={{ padding: '20px' }}>
                     {/* Summary */}
                     {call.call_summary && (
@@ -645,24 +916,87 @@ export default function CalledCandidatesView({ onSelectCandidate }: CalledCandid
                       </div>
                     )}
 
-                    {/* View Candidate Button */}
-                    {onSelectCandidate && call.candidate_id && (
-                      <button
-                        onClick={() => onSelectCandidate({ id: call.candidate_id })}
+                    {/* Action Buttons */}
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                      {activeTab === 'unprocessed' && (
+                        <button
+                          onClick={() => {
+                            setEditingCall(call.id);
+                            setEditForm({
+                              candidate_name: call.candidate_name || '',
+                              quality_assessment: call.quality_assessment || 'C',
+                              energy_score: call.energy_score || 5,
+                              call_summary: call.call_summary || ''
+                            });
+                          }}
+                          style={{
+                            padding: '10px 20px',
+                            background: '#3b82f6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontWeight: '500'
+                          }}
+                        >
+                          ✏️ Grade This Call
+                        </button>
+                      )}
+                      
+                      <a
+                        href={`tel:${call.phone_e164}`}
                         style={{
-                          marginTop: '16px',
                           padding: '10px 20px',
-                          background: '#3b82f6',
+                          background: '#22c55e',
                           color: 'white',
                           border: 'none',
                           borderRadius: '8px',
                           cursor: 'pointer',
-                          fontWeight: '500'
+                          fontWeight: '500',
+                          textDecoration: 'none',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
                         }}
                       >
-                        View Full Candidate Profile →
-                      </button>
-                    )}
+                        📞 Call Back
+                      </a>
+
+                      <a
+                        href={`https://wa.me/${call.phone_e164?.replace('+', '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          padding: '10px 20px',
+                          background: '#25d366',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '500',
+                          textDecoration: 'none'
+                        }}
+                      >
+                        💬 WhatsApp
+                      </a>
+
+                      {onSelectCandidate && call.candidate_id && (
+                        <button
+                          onClick={() => onSelectCandidate({ id: call.candidate_id })}
+                          style={{
+                            padding: '10px 20px',
+                            background: 'white',
+                            color: '#3b82f6',
+                            border: '1px solid #3b82f6',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontWeight: '500'
+                          }}
+                        >
+                          View Full Profile →
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
