@@ -35,7 +35,7 @@ interface FollowUpCandidate {
   status: string;
   earliest_start_date: string | null;
   last_called_at: string | null;
-  energy_score: number | null;
+  energy_score?: number | null;
 }
 
 export default function RecruiterDashboard() {
