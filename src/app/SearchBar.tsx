@@ -3,100 +3,195 @@ import { useState, useRef, useEffect } from 'react';
 
 interface Props {
   onSearch: (query: string) => void;
-  placeholder?: string;
-  suggestions?: string[];
   initialValue?: string;
+  placeholder?: string;
 }
 
-const RECENT_KEY = 'recent_searches';
-
-export default function SearchBar({ onSearch, placeholder = 'Search candidates...', suggestions = [], initialValue = '' }: Props) {
-  const [query, setQuery] = useState(initialValue);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+export default function SearchBar({ onSearch, initialValue = '', placeholder = 'Search candidates...' }: Props) {
+  const [value, setValue] = useState(initialValue);
+  const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => {
-    const saved = localStorage.getItem(RECENT_KEY);
-    if (saved) setRecentSearches(JSON.parse(saved));
-  }, []);
-
-  useEffect(() => {
-    setQuery(initialValue);
+    setValue(initialValue);
   }, [initialValue]);
 
-  const handleSearch = (value: string) => {
-    setQuery(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value;
+    setValue(newValue);
+    
+    // Debounce search
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
     debounceRef.current = setTimeout(() => {
-      onSearch(value);
-      if (value.trim() && !recentSearches.includes(value)) {
-        const updated = [value, ...recentSearches].slice(0, 5);
-        setRecentSearches(updated);
-        localStorage.setItem(RECENT_KEY, JSON.stringify(updated));
-      }
+      onSearch(newValue);
     }, 300);
   };
 
   const handleClear = () => {
-    setQuery('');
+    setValue('');
     onSearch('');
     inputRef.current?.focus();
   };
 
-  const selectSuggestion = (s: string) => {
-    setQuery(s);
-    onSearch(s);
-    setShowSuggestions(false);
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      handleClear();
+      inputRef.current?.blur();
+    }
+    if (e.key === 'Enter') {
+      onSearch(value);
+    }
   };
 
-  const allSuggestions = [...new Set([...suggestions, ...recentSearches])].filter(s => 
-    s.toLowerCase().includes(query.toLowerCase())
-  ).slice(0, 8);
+  const styles = `
+    .search-bar {
+      position: relative;
+      width: 280px;
+    }
+    
+    .search-input-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: white;
+      border: 2px solid var(--gray-200);
+      border-radius: var(--radius-lg);
+      transition: all var(--transition-fast);
+    }
+    
+    .search-input-wrap:hover {
+      border-color: var(--gray-300);
+    }
+    
+    .search-input-wrap.focused {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px var(--primary-50);
+    }
+    
+    .search-icon {
+      font-size: 16px;
+      color: var(--gray-400);
+      flex-shrink: 0;
+      transition: color var(--transition-fast);
+    }
+    
+    .search-input-wrap.focused .search-icon {
+      color: var(--primary);
+    }
+    
+    .search-input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 14px;
+      font-family: var(--font-body);
+      color: var(--gray-800);
+      background: transparent;
+      min-width: 0;
+    }
+    
+    .search-input::placeholder {
+      color: var(--gray-400);
+    }
+    
+    .search-clear {
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--gray-100);
+      border: none;
+      border-radius: var(--radius-full);
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--gray-500);
+      flex-shrink: 0;
+      transition: all var(--transition-fast);
+      opacity: 0;
+      transform: scale(0.8);
+    }
+    
+    .search-input-wrap.has-value .search-clear {
+      opacity: 1;
+      transform: scale(1);
+    }
+    
+    .search-clear:hover {
+      background: var(--gray-200);
+      color: var(--gray-700);
+    }
+    
+    .search-hint {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      padding: 8px 14px;
+      background: white;
+      border: 1px solid var(--gray-200);
+      border-top: none;
+      border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+      font-size: 12px;
+      color: var(--gray-500);
+      box-shadow: var(--shadow-md);
+      opacity: 0;
+      visibility: hidden;
+      transition: all var(--transition-fast);
+    }
+    
+    .search-input-wrap.focused + .search-hint {
+      opacity: 1;
+      visibility: visible;
+    }
+    
+    .search-hint-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0;
+    }
+    
+    .search-hint-key {
+      padding: 2px 6px;
+      background: var(--gray-100);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+    }
+  `;
 
   return (
-    <div style={{ position: 'relative', width: '100%', maxWidth: 400 }}>
-      <style>{`
-        .sb-input{width:100%;padding:10px 40px 10px 40px;font-size:14px;border:1px solid #e5e7eb;border-radius:10px;outline:none;transition:all .15s}
-        .sb-input:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.12)}
-        .sb-icon{position:absolute;top:50%;transform:translateY(-50%);color:#9ca3af;font-size:16px;pointer-events:none}
-        .sb-clear{position:absolute;right:12px;top:50%;transform:translateY(-50%);width:20px;height:20px;border:none;background:#e5e7eb;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;color:#6b7280}
-        .sb-clear:hover{background:#d1d5db}
-        .sb-dropdown{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,.1);z-index:50;overflow:hidden}
-        .sb-item{padding:10px 14px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:10px}
-        .sb-item:hover{background:#f3f4f6}
-        .sb-item-icon{color:#9ca3af;font-size:14px}
-      `}</style>
+    <div className="search-bar">
+      <style>{styles}</style>
       
-      <span className="sb-icon" style={{ left: 14 }}>🔍</span>
-      
-      <input
-        ref={inputRef}
-        type="text"
-        className="sb-input"
-        placeholder={placeholder}
-        value={query}
-        onChange={e => handleSearch(e.target.value)}
-        onFocus={() => setShowSuggestions(true)}
-        onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-      />
-      
-      {query && (
-        <button className="sb-clear" onClick={handleClear}>✕</button>
-      )}
-      
-      {showSuggestions && allSuggestions.length > 0 && (
-        <div className="sb-dropdown">
-          {allSuggestions.map((s, i) => (
-            <div key={i} className="sb-item" onClick={() => selectSuggestion(s)}>
-              <span className="sb-item-icon">{recentSearches.includes(s) ? '🕐' : '🔍'}</span>
-              <span>{s}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className={`search-input-wrap ${isFocused ? 'focused' : ''} ${value ? 'has-value' : ''}`}>
+        <span className="search-icon">🔍</span>
+        <input
+          ref={inputRef}
+          className="search-input"
+          type="text"
+          value={value}
+          onChange={handleChange}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+        />
+        <button 
+          className="search-clear" 
+          onClick={handleClear}
+          tabIndex={-1}
+          type="button"
+        >
+          ×
+        </button>
+      </div>
     </div>
   );
 }

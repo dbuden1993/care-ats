@@ -1,142 +1,118 @@
 'use client';
 
 interface Props {
-  name?: string;
-  src?: string;
+  name?: string | null;
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-  status?: 'online' | 'offline' | 'busy' | 'away';
-  color?: string;
-  onClick?: () => void;
+  src?: string | null;
+  status?: 'online' | 'offline' | 'busy' | 'away' | null;
+  className?: string;
 }
 
-const SIZES = {
-  xs: { size: 24, fontSize: 10, statusSize: 6 },
-  sm: { size: 32, fontSize: 12, statusSize: 8 },
-  md: { size: 40, fontSize: 14, statusSize: 10 },
-  lg: { size: 56, fontSize: 18, statusSize: 12 },
-  xl: { size: 80, fontSize: 24, statusSize: 14 },
-};
+export default function Avatar({ name, size = 'md', src, status, className = '' }: Props) {
+  const getInitials = (name: string | null | undefined): string => {
+    if (!name) return '?';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0][0]?.toUpperCase() || '?';
+    return (parts[0][0] + (parts[parts.length - 1][0] || '')).toUpperCase();
+  };
 
-const STATUS_COLORS = {
-  online: '#10b981',
-  offline: '#9ca3af',
-  busy: '#ef4444',
-  away: '#f59e0b',
-};
+  const getColor = (name: string | null | undefined): string => {
+    const colors = [
+      'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+      'linear-gradient(135deg, #ec4899 0%, #f472b6 100%)',
+      'linear-gradient(135deg, #14b8a6 0%, #2dd4bf 100%)',
+      'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
+      'linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)',
+      'linear-gradient(135deg, #10b981 0%, #34d399 100%)',
+      'linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%)',
+      'linear-gradient(135deg, #ef4444 0%, #f87171 100%)',
+    ];
+    const index = (name?.charCodeAt(0) || 0) % colors.length;
+    return colors[index];
+  };
 
-const COLORS = [
-  'linear-gradient(135deg, #6366f1, #4f46e5)',
-  'linear-gradient(135deg, #8b5cf6, #7c3aed)',
-  'linear-gradient(135deg, #ec4899, #db2777)',
-  'linear-gradient(135deg, #f59e0b, #d97706)',
-  'linear-gradient(135deg, #10b981, #059669)',
-  'linear-gradient(135deg, #06b6d4, #0891b2)',
-  'linear-gradient(135deg, #f43f5e, #e11d48)',
-];
+  const sizeConfig = {
+    xs: { size: 24, fontSize: 10, statusSize: 8 },
+    sm: { size: 32, fontSize: 12, statusSize: 10 },
+    md: { size: 40, fontSize: 14, statusSize: 12 },
+    lg: { size: 52, fontSize: 18, statusSize: 14 },
+    xl: { size: 72, fontSize: 24, statusSize: 18 },
+  };
 
-function getColorFromName(name?: string): string {
-  if (!name) return COLORS[0];
-  const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return COLORS[hash % COLORS.length];
-}
+  const statusColors = {
+    online: '#10b981',
+    offline: '#94a3b8',
+    busy: '#ef4444',
+    away: '#f59e0b',
+  };
 
-function getInitials(name?: string): string {
-  if (!name) return '?';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0][0]?.toUpperCase() || '?';
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
+  const config = sizeConfig[size];
 
-export default function Avatar({ name, src, size = 'md', status, color, onClick }: Props) {
-  const sizeConfig = SIZES[size];
-  const bgColor = color || getColorFromName(name);
+  const styles = `
+    .avatar-container {
+      position: relative;
+      display: inline-flex;
+    }
+    
+    .avatar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-lg);
+      color: white;
+      font-weight: 700;
+      flex-shrink: 0;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    
+    .avatar-status {
+      position: absolute;
+      bottom: -2px;
+      right: -2px;
+      border-radius: 50%;
+      border: 2px solid white;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    }
+  `;
 
   return (
-    <div 
-      style={{
-        position: 'relative',
-        width: sizeConfig.size,
-        height: sizeConfig.size,
-        flexShrink: 0,
-        cursor: onClick ? 'pointer' : 'default',
-      }}
-      onClick={onClick}
-    >
-      {src ? (
-        <img
-          src={src}
-          alt={name || 'Avatar'}
+    <>
+      <style>{styles}</style>
+      <div className={`avatar-container ${className}`}>
+        <div 
+          className="avatar"
           style={{
-            width: '100%',
-            height: '100%',
-            borderRadius: 10,
-            objectFit: 'cover',
+            width: config.size,
+            height: config.size,
+            fontSize: config.fontSize,
+            background: src ? 'var(--gray-200)' : getColor(name),
+            borderRadius: size === 'xs' || size === 'sm' ? 'var(--radius-md)' : 'var(--radius-lg)',
           }}
-        />
-      ) : (
-        <div style={{
-          width: '100%',
-          height: '100%',
-          borderRadius: 10,
-          background: bgColor,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#fff',
-          fontSize: sizeConfig.fontSize,
-          fontWeight: 600,
-          userSelect: 'none',
-        }}>
-          {getInitials(name)}
+        >
+          {src ? (
+            <img src={src} alt={name || 'Avatar'} />
+          ) : (
+            getInitials(name)
+          )}
         </div>
-      )}
-      {status && (
-        <div style={{
-          position: 'absolute',
-          bottom: -2,
-          right: -2,
-          width: sizeConfig.statusSize,
-          height: sizeConfig.statusSize,
-          borderRadius: '50%',
-          background: STATUS_COLORS[status],
-          border: '2px solid #fff',
-          boxSizing: 'content-box',
-        }} />
-      )}
-    </div>
-  );
-}
-
-export function AvatarGroup({ children, max = 4 }: { children: React.ReactNode; max?: number }) {
-  const childArray = Array.isArray(children) ? children : [children];
-  const visible = childArray.slice(0, max);
-  const remaining = childArray.length - max;
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center' }}>
-      {visible.map((child, i) => (
-        <div key={i} style={{ marginLeft: i > 0 ? -8 : 0, position: 'relative', zIndex: max - i }}>
-          {child}
-        </div>
-      ))}
-      {remaining > 0 && (
-        <div style={{
-          marginLeft: -8,
-          width: 32,
-          height: 32,
-          borderRadius: 10,
-          background: '#e5e7eb',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 11,
-          fontWeight: 600,
-          color: '#6b7280',
-          border: '2px solid #fff',
-        }}>
-          +{remaining}
-        </div>
-      )}
-    </div>
+        {status && (
+          <div 
+            className="avatar-status"
+            style={{
+              width: config.statusSize,
+              height: config.statusSize,
+              background: statusColors[status],
+            }}
+          />
+        )}
+      </div>
+    </>
   );
 }

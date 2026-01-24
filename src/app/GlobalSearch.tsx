@@ -13,6 +13,7 @@ export default function GlobalSearch({ candidates, jobs, onSelectCandidate, onSe
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [isClosing, setIsClosing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -21,23 +22,31 @@ export default function GlobalSearch({ candidates, jobs, onSelectCandidate, onSe
         e.preventDefault();
         setOpen(true);
       }
-      if (e.key === 'Escape') {
-        setOpen(false);
-        setQuery('');
+      if (e.key === 'Escape' && open) {
+        handleClose();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [open]);
 
   useEffect(() => {
     if (open) {
       inputRef.current?.focus();
       setSelectedIndex(0);
+      setIsClosing(false);
     }
   }, [open]);
 
-  // Safe string matching helper
+  const handleClose = () => {
+    setIsClosing(true);
+    setTimeout(() => {
+      setOpen(false);
+      setQuery('');
+      setIsClosing(false);
+    }, 150);
+  };
+
   const matchesQuery = (value: any, searchQuery: string): boolean => {
     if (!value || !searchQuery) return false;
     const str = Array.isArray(value) ? value.join(' ') : String(value);
@@ -62,15 +71,14 @@ export default function GlobalSearch({ candidates, jobs, onSelectCandidate, onSe
     : [];
 
   const quickActions = [
-    { icon: '➕', label: 'Add Candidate', action: () => onNavigate('add-candidate') },
-    { icon: '💼', label: 'Create Job', action: () => onNavigate('add-job') },
-    { icon: '📅', label: 'View Calendar', action: () => onNavigate('interviews') },
-    { icon: '📊', label: 'View Reports', action: () => onNavigate('reports') },
-    { icon: '👥', label: 'All Candidates', action: () => onNavigate('candidates') },
-    { icon: '⚙️', label: 'Settings', action: () => onNavigate('settings') },
+    { icon: '👤', label: 'Add Candidate', description: 'Create a new candidate profile', action: () => onNavigate('add-candidate'), color: '#6366f1' },
+    { icon: '💼', label: 'Create Job', description: 'Post a new job listing', action: () => onNavigate('add-job'), color: '#f59e0b' },
+    { icon: '📞', label: 'Call History', description: 'View all call recordings', action: () => onNavigate('call-history'), color: '#ec4899' },
+    { icon: '📱', label: 'SMS Campaign', description: 'Start bulk SMS outreach', action: () => onNavigate('sms'), color: '#06b6d4' },
+    { icon: '📊', label: 'Dashboard', description: 'View recruitment overview', action: () => onNavigate('dashboard'), color: '#10b981' },
+    { icon: '📈', label: 'Reports', description: 'Analytics and insights', action: () => onNavigate('reports'), color: '#8b5cf6' },
   ];
 
-  // Build flat list for keyboard navigation
   const allItems: { type: string; item: any }[] = [];
   if (query.length < 2) {
     quickActions.forEach(a => allItems.push({ type: 'action', item: a }));
@@ -96,184 +104,437 @@ export default function GlobalSearch({ candidates, jobs, onSelectCandidate, onSe
     if (type === 'candidate') onSelectCandidate(item);
     else if (type === 'job') onSelectJob(item);
     else if (type === 'action') item.action();
-    setOpen(false);
-    setQuery('');
+    handleClose();
   };
 
-  // Get display value for roles (handle array or string)
   const getRolesDisplay = (roles: any): string => {
     if (!roles) return '';
     if (Array.isArray(roles)) return roles.join(', ');
     return String(roles);
   };
 
+  const getAvatarColor = (name: string) => {
+    const colors = ['#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#3b82f6', '#10b981'];
+    return colors[(name?.charCodeAt(0) || 0) % colors.length];
+  };
+
+  const styles = `
+    @keyframes searchOverlayIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    
+    @keyframes searchOverlayOut {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+    
+    @keyframes searchModalIn {
+      from { opacity: 0; transform: scale(0.96) translateY(-20px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    
+    @keyframes searchModalOut {
+      from { opacity: 1; transform: scale(1) translateY(0); }
+      to { opacity: 0; transform: scale(0.96) translateY(-20px); }
+    }
+    
+    .gs-trigger {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background: white;
+      border: 1px solid var(--gray-200);
+      border-radius: var(--radius-lg);
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--gray-500);
+      transition: all var(--transition-fast);
+      min-width: 220px;
+    }
+    
+    .gs-trigger:hover {
+      border-color: var(--gray-300);
+      box-shadow: var(--shadow-sm);
+    }
+    
+    .gs-trigger-icon {
+      font-size: 16px;
+    }
+    
+    .gs-trigger-text {
+      flex: 1;
+    }
+    
+    .gs-trigger-kbd {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      background: var(--gray-100);
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      color: var(--gray-500);
+    }
+    
+    .gs-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 15vh;
+      z-index: 1100;
+      animation: searchOverlayIn 0.15s ease-out forwards;
+    }
+    
+    .gs-overlay.closing {
+      animation: searchOverlayOut 0.15s ease-out forwards;
+    }
+    
+    .gs-modal {
+      background: white;
+      border-radius: var(--radius-2xl);
+      width: 100%;
+      max-width: 600px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+      overflow: hidden;
+      animation: searchModalIn 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+    
+    .gs-overlay.closing .gs-modal {
+      animation: searchModalOut 0.15s ease-out forwards;
+    }
+    
+    .gs-input-wrap {
+      padding: 20px;
+      border-bottom: 1px solid var(--gray-100);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    
+    .gs-input-icon {
+      font-size: 22px;
+      color: var(--gray-400);
+    }
+    
+    .gs-input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 18px;
+      font-family: var(--font-body);
+      color: var(--gray-900);
+      background: transparent;
+    }
+    
+    .gs-input::placeholder {
+      color: var(--gray-400);
+    }
+    
+    .gs-input-kbd {
+      padding: 6px 10px;
+      background: var(--gray-100);
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--gray-500);
+      font-family: var(--font-mono);
+    }
+    
+    .gs-results {
+      max-height: 420px;
+      overflow-y: auto;
+    }
+    
+    .gs-section {
+      padding: 8px 0;
+    }
+    
+    .gs-section-title {
+      padding: 10px 20px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--gray-400);
+    }
+    
+    .gs-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 20px;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    
+    .gs-item:hover,
+    .gs-item.selected {
+      background: var(--gray-50);
+    }
+    
+    .gs-item.selected {
+      background: var(--primary-50);
+    }
+    
+    .gs-item-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    
+    .gs-item-icon.action {
+      background: var(--gray-100);
+    }
+    
+    .gs-item-icon.candidate {
+      color: white;
+      font-weight: 700;
+    }
+    
+    .gs-item-icon.job {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    }
+    
+    .gs-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .gs-item-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--gray-900);
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .gs-item-sub {
+      font-size: 12px;
+      color: var(--gray-500);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .gs-item-badge {
+      padding: 4px 10px;
+      background: var(--gray-100);
+      border-radius: var(--radius-full);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--gray-600);
+      text-transform: capitalize;
+    }
+    
+    .gs-item-arrow {
+      font-size: 14px;
+      color: var(--gray-400);
+      opacity: 0;
+      transition: opacity var(--transition-fast);
+    }
+    
+    .gs-item:hover .gs-item-arrow,
+    .gs-item.selected .gs-item-arrow {
+      opacity: 1;
+    }
+    
+    .gs-empty {
+      padding: 48px 20px;
+      text-align: center;
+    }
+    
+    .gs-empty-icon {
+      font-size: 48px;
+      margin-bottom: 12px;
+      opacity: 0.4;
+    }
+    
+    .gs-empty-text {
+      font-size: 14px;
+      color: var(--gray-500);
+    }
+    
+    .gs-footer {
+      padding: 14px 20px;
+      border-top: 1px solid var(--gray-100);
+      display: flex;
+      gap: 20px;
+      font-size: 12px;
+      color: var(--gray-400);
+      background: var(--gray-50);
+    }
+    
+    .gs-footer-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .gs-footer-kbd {
+      padding: 3px 6px;
+      background: white;
+      border: 1px solid var(--gray-200);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+    }
+  `;
+
   if (!open) {
     return (
-      <button 
-        onClick={() => setOpen(true)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '8px 12px',
-          background: '#f3f4f6',
-          border: '1px solid #e5e7eb',
-          borderRadius: 8,
-          cursor: 'pointer',
-          fontSize: 13,
-          color: '#6b7280',
-          transition: 'all 0.15s'
-        }}
-      >
-        <span>🔍</span>
-        <span>Search...</span>
-        <span style={{ 
-          padding: '2px 6px', 
-          background: '#fff', 
-          borderRadius: 4, 
-          fontSize: 10, 
-          fontWeight: 600,
-          border: '1px solid #e5e7eb'
-        }}>⌘K</span>
-      </button>
+      <>
+        <style>{styles}</style>
+        <button className="gs-trigger" onClick={() => setOpen(true)}>
+          <span className="gs-trigger-icon">🔍</span>
+          <span className="gs-trigger-text">Search...</span>
+          <span className="gs-trigger-kbd">⌘K</span>
+        </button>
+      </>
     );
   }
 
   return (
-    <div style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0,0,0,0.5)',
-      display: 'flex',
-      alignItems: 'flex-start',
-      justifyContent: 'center',
-      paddingTop: 100,
-      zIndex: 1100
-    }} onClick={() => { setOpen(false); setQuery(''); }}>
-      <style>{`
-        .gsearch-modal{background:#fff;border-radius:16px;width:100%;max-width:560px;box-shadow:0 20px 60px rgba(0,0,0,.2);animation:gsearchIn .15s ease}
-        @keyframes gsearchIn{from{opacity:0;transform:scale(.98) translateY(-10px)}to{opacity:1;transform:scale(1) translateY(0)}}
-        .gsearch-input-wrap{padding:16px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:12px}
-        .gsearch-icon{font-size:18px;color:#9ca3af}
-        .gsearch-input{flex:1;border:none;outline:none;font-size:16px;color:#111}
-        .gsearch-input::placeholder{color:#9ca3af}
-        .gsearch-kbd{padding:4px 8px;background:#f3f4f6;border-radius:4px;font-size:10px;color:#6b7280;font-family:monospace}
-        .gsearch-results{max-height:400px;overflow-y:auto}
-        .gsearch-section{padding:8px 0}
-        .gsearch-section-title{padding:8px 16px;font-size:10px;font-weight:600;color:#9ca3af;text-transform:uppercase}
-        .gsearch-item{display:flex;align-items:center;gap:12px;padding:10px 16px;cursor:pointer;transition:background .1s}
-        .gsearch-item:hover,.gsearch-item.selected{background:#f3f4f6}
-        .gsearch-item.selected{background:#eef2ff}
-        .gsearch-item-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px}
-        .gsearch-item-icon.candidate{background:#eef2ff;color:#4f46e5}
-        .gsearch-item-icon.job{background:#ecfdf5;color:#059669}
-        .gsearch-item-icon.action{background:#f3f4f6;color:#374151}
-        .gsearch-item-info{flex:1;min-width:0}
-        .gsearch-item-title{font-size:13px;font-weight:500;color:#111;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .gsearch-item-sub{font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .gsearch-item-badge{padding:3px 8px;background:#f3f4f6;border-radius:4px;font-size:10px;font-weight:500;color:#6b7280;text-transform:capitalize}
-        .gsearch-empty{padding:32px;text-align:center;color:#9ca3af;font-size:13px}
-        .gsearch-footer{padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:16px;font-size:11px;color:#9ca3af}
-        .gsearch-footer span{display:flex;align-items:center;gap:4px}
-        .gsearch-footer kbd{padding:2px 6px;background:#f3f4f6;border-radius:3px;font-family:monospace}
-      `}</style>
-      
-      <div className="gsearch-modal" onClick={e => e.stopPropagation()}>
-        <div className="gsearch-input-wrap">
-          <span className="gsearch-icon">🔍</span>
-          <input
-            ref={inputRef}
-            className="gsearch-input"
-            placeholder="Search candidates, jobs, or type a command..."
-            value={query}
-            onChange={e => { setQuery(e.target.value); setSelectedIndex(0); }}
-            onKeyDown={handleKeyDown}
-          />
-          <span className="gsearch-kbd">ESC</span>
-        </div>
-        
-        <div className="gsearch-results">
-          {query.length < 2 && (
-            <div className="gsearch-section">
-              <div className="gsearch-section-title">Quick Actions</div>
-              {quickActions.map((a, i) => (
-                <div 
-                  key={i} 
-                  className={`gsearch-item ${selectedIndex === i ? 'selected' : ''}`}
-                  onClick={() => handleSelect('action', a)}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                >
-                  <div className="gsearch-item-icon action">{a.icon}</div>
-                  <div className="gsearch-item-info">
-                    <div className="gsearch-item-title">{a.label}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+    <>
+      <style>{styles}</style>
+      <div 
+        className={`gs-overlay ${isClosing ? 'closing' : ''}`} 
+        onClick={handleClose}
+      >
+        <div className="gs-modal" onClick={e => e.stopPropagation()}>
+          <div className="gs-input-wrap">
+            <span className="gs-input-icon">🔍</span>
+            <input
+              ref={inputRef}
+              className="gs-input"
+              placeholder="Search candidates, jobs, or commands..."
+              value={query}
+              onChange={e => { setQuery(e.target.value); setSelectedIndex(0); }}
+              onKeyDown={handleKeyDown}
+            />
+            <span className="gs-input-kbd">ESC</span>
+          </div>
           
-          {filteredCandidates.length > 0 && (
-            <div className="gsearch-section">
-              <div className="gsearch-section-title">Candidates</div>
-              {filteredCandidates.map((c, i) => {
-                const idx = i;
-                return (
+          <div className="gs-results">
+            {query.length < 2 && (
+              <div className="gs-section">
+                <div className="gs-section-title">Quick Actions</div>
+                {quickActions.map((a, i) => (
+                  <div 
+                    key={i} 
+                    className={`gs-item ${selectedIndex === i ? 'selected' : ''}`}
+                    onClick={() => handleSelect('action', a)}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                  >
+                    <div 
+                      className="gs-item-icon action"
+                      style={{ background: `${a.color}15`, color: a.color }}
+                    >
+                      {a.icon}
+                    </div>
+                    <div className="gs-item-info">
+                      <div className="gs-item-title">{a.label}</div>
+                      <div className="gs-item-sub">{a.description}</div>
+                    </div>
+                    <span className="gs-item-arrow">→</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            {filteredCandidates.length > 0 && (
+              <div className="gs-section">
+                <div className="gs-section-title">Candidates</div>
+                {filteredCandidates.map((c, i) => (
                   <div 
                     key={c.id} 
-                    className={`gsearch-item ${selectedIndex === idx ? 'selected' : ''}`}
+                    className={`gs-item ${selectedIndex === i ? 'selected' : ''}`}
                     onClick={() => handleSelect('candidate', c)}
-                    onMouseEnter={() => setSelectedIndex(idx)}
+                    onMouseEnter={() => setSelectedIndex(i)}
                   >
-                    <div className="gsearch-item-icon candidate">{(c.name || '?')[0].toUpperCase()}</div>
-                    <div className="gsearch-item-info">
-                      <div className="gsearch-item-title">{c.name || 'Unknown'}</div>
-                      <div className="gsearch-item-sub">{getRolesDisplay(c.roles) || c.phone_e164 || 'No details'}</div>
+                    <div 
+                      className="gs-item-icon candidate"
+                      style={{ background: getAvatarColor(c.name) }}
+                    >
+                      {(c.name || '?')[0].toUpperCase()}
                     </div>
-                    <span className="gsearch-item-badge">{c.status || 'new'}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          
-          {filteredJobs.length > 0 && (
-            <div className="gsearch-section">
-              <div className="gsearch-section-title">Jobs</div>
-              {filteredJobs.map((j, i) => {
-                const idx = filteredCandidates.length + i;
-                return (
-                  <div 
-                    key={j.id} 
-                    className={`gsearch-item ${selectedIndex === idx ? 'selected' : ''}`}
-                    onClick={() => handleSelect('job', j)}
-                    onMouseEnter={() => setSelectedIndex(idx)}
-                  >
-                    <div className="gsearch-item-icon job">💼</div>
-                    <div className="gsearch-item-info">
-                      <div className="gsearch-item-title">{j.title}</div>
-                      <div className="gsearch-item-sub">{j.department || 'No department'} • {j.location || 'No location'}</div>
+                    <div className="gs-item-info">
+                      <div className="gs-item-title">{c.name || 'Unknown'}</div>
+                      <div className="gs-item-sub">
+                        {getRolesDisplay(c.roles) || c.phone_e164 || 'No details'}
+                      </div>
                     </div>
-                    <span className="gsearch-item-badge">{j.status || 'draft'}</span>
+                    <span className="gs-item-badge">{c.status || 'new'}</span>
+                    <span className="gs-item-arrow">→</span>
                   </div>
-                );
-              })}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+            
+            {filteredJobs.length > 0 && (
+              <div className="gs-section">
+                <div className="gs-section-title">Jobs</div>
+                {filteredJobs.map((j, i) => {
+                  const idx = filteredCandidates.length + i;
+                  return (
+                    <div 
+                      key={j.id} 
+                      className={`gs-item ${selectedIndex === idx ? 'selected' : ''}`}
+                      onClick={() => handleSelect('job', j)}
+                      onMouseEnter={() => setSelectedIndex(idx)}
+                    >
+                      <div className="gs-item-icon job">💼</div>
+                      <div className="gs-item-info">
+                        <div className="gs-item-title">{j.title}</div>
+                        <div className="gs-item-sub">
+                          {j.department || 'No department'} • {j.location || 'No location'}
+                        </div>
+                      </div>
+                      <span className="gs-item-badge">{j.status || 'draft'}</span>
+                      <span className="gs-item-arrow">→</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            
+            {query.length >= 2 && filteredCandidates.length === 0 && filteredJobs.length === 0 && (
+              <div className="gs-empty">
+                <div className="gs-empty-icon">🔍</div>
+                <div className="gs-empty-text">No results found for "{query}"</div>
+              </div>
+            )}
+          </div>
           
-          {query.length >= 2 && filteredCandidates.length === 0 && filteredJobs.length === 0 && (
-            <div className="gsearch-empty">
-              <div style={{fontSize:32,marginBottom:8}}>🔍</div>
-              No results found for "{query}"
-            </div>
-          )}
-        </div>
-        
-        <div className="gsearch-footer">
-          <span><kbd>↵</kbd> Select</span>
-          <span><kbd>↑↓</kbd> Navigate</span>
-          <span><kbd>ESC</kbd> Close</span>
+          <div className="gs-footer">
+            <span className="gs-footer-item">
+              <span className="gs-footer-kbd">↵</span> Select
+            </span>
+            <span className="gs-footer-item">
+              <span className="gs-footer-kbd">↑</span>
+              <span className="gs-footer-kbd">↓</span> Navigate
+            </span>
+            <span className="gs-footer-item">
+              <span className="gs-footer-kbd">ESC</span> Close
+            </span>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
