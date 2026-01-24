@@ -37,6 +37,7 @@ import CandidateDetailPanel from './CandidateDetailPanel';
 import CandidateImport from './CandidateImport';
 import ImportedCandidatesView from './ImportedCandidatesView';
 import CalledCandidatesView from './CalledCandidatesView';
+import CandidateDashboard from './CandidateDashboard';
 import FilterPresets from './FilterPresets';
 import Tooltip from './Tooltip';
 import { getJobs, createJob } from './db';
@@ -45,7 +46,7 @@ import type { Job, Pipeline, ViewMode, SidebarSection } from './types';
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
-type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms';
+type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms' | 'candidate-dashboard';
 
 function Dashboard() {
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -248,8 +249,8 @@ function Dashboard() {
   const navItems = [
     { section: 'RECRUITMENT', items: [
       { id: 'dashboard', icon: '📊', label: 'Dashboard' }, 
-      { id: 'call-history', icon: '📞', label: 'Call History', badge: callHistoryCount },
-      { id: 'candidates', icon: '👥', label: 'Called Candidates', badge: stats.total }, 
+      { id: 'candidate-dashboard', icon: '👥', label: 'Candidates', badge: callHistoryCount },
+      { id: 'candidates', icon: '📋', label: 'Pipeline', badge: stats.total },
       { id: 'imported', icon: '📥', label: 'Imported Pool', badge: importedCount }, 
       { id: 'jobs', icon: '💼', label: 'Jobs', badge: jobs.filter(j => j.status === 'open').length }, 
       { id: 'interviews', icon: '📅', label: 'Interviews' }
@@ -404,18 +405,8 @@ function Dashboard() {
           </>
         )}
 
-        {section === 'call-history' && (
-          <>
-            <div className="topbar">
-              <div className="topbar-left">
-                <h1 className="page-title">📞 Call History</h1>
-                <span style={{ fontSize: 13, color: '#6b7280' }}>AI-analyzed call recordings</span>
-              </div>
-            </div>
-            <div className="content">
-              <CalledCandidatesView onSelectCandidate={setSelectedCandidate} />
-            </div>
-          </>
+        {section === 'candidate-dashboard' && (
+          <CandidateDashboard onSelectCandidate={setSelectedCandidate} />
         )}
         
         {section === 'imported' && (
@@ -433,7 +424,7 @@ function Dashboard() {
           <>
             <div className="topbar">
               <div className="topbar-left">
-                <h1 className="page-title">Candidates</h1>
+                <h1 className="page-title">📋 Pipeline</h1>
                 <div className="view-toggle">
                   <button className={`view-btn ${viewMode === 'list' ? 'active' : ''}`} onClick={() => setViewMode('list')}>☰ List</button>
                   <button className={`view-btn ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')}>▦ Kanban</button>
