@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 
 const supabase = createBrowserClient(
@@ -9,843 +9,448 @@ const supabase = createBrowserClient(
 
 interface Candidate {
   id: string;
-  name: string;
+  name: string | null;
   phone_e164: string;
   status: string;
-  source: string;
-  roles: string[];
-  created_at: string;
+  source: string | null;
   last_called_at: string | null;
+  sms_opt_out?: boolean;
 }
 
-interface SMSLog {
+interface SendLog {
   phone: string;
   name: string;
   status: 'pending' | 'sent' | 'failed';
-  sentAt?: string;
   error?: string;
 }
 
-export default function SMSCampaign() {
+export default function SMSCampaignView() {
+  const [activeTab, setActiveTab] = useState<'compose' | 'conversations' | 'campaigns'>('compose');
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [filteredCandidates, setFilteredCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState(
-    `Hi {name}, this is Dario from Curevita Care. We have care worker positions available in your area with competitive pay. If you're interested, please reply YES or call me back on this number. Thanks!`
-  );
-  const [filter, setFilter] = useState({
-    status: 'all',
-    source: 'all',
-    hasBeenCalled: 'not_called', // 'all', 'called', 'not_called'
-    search: ''
-  });
-  
-  // Sending state
+  const [message, setMessage] = useState('Hi {name}, this is [Your Name] from [Company]. We have care positions available. Are you looking for work? Reply YES if interested or STOP to opt out.');
+  const [campaignName, setCampaignName] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterSource, setFilterSource] = useState('all');
+  const [filterCalled, setFilterCalled] = useState('all');
+  const [excludeOptOut, setExcludeOptOut] = useState(true);
+  const [gatewayUrl, setGatewayUrl] = useState('http://192.168.1.100:8080');
+  const [sendDelay, setSendDelay] = useState(30);
   const [isSending, setIsSending] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [sendingProgress, setSendingProgress] = useState(0);
-  const [smsLog, setSmsLog] = useState<SMSLog[]>([]);
-  const [sendInterval, setSendInterval] = useState(30); // seconds between messages
-  const sendingRef = useRef(false);
-  const pausedRef = useRef(false);
-
-  // SMS Gateway settings
-  const [gatewayType, setGatewayType] = useState<'csv' | 'android' | 'manual'>('manual');
-  const [androidGatewayUrl, setAndroidGatewayUrl] = useState('http://192.168.1.100:8080'); // Local IP of Android phone
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [sendLog, setSendLog] = useState<SendLog[]>([]);
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [selectedConvo, setSelectedConvo] = useState<any>(null);
+  const abortRef = useRef(false);
 
   useEffect(() => {
     loadCandidates();
+    loadConversations();
   }, []);
-
-  useEffect(() => {
-    applyFilters();
-  }, [candidates, filter]);
 
   async function loadCandidates() {
     setLoading(true);
-    
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('candidates')
-      .select('id, name, phone_e164, status, source, roles, created_at, last_called_at')
+      .select('id, name, phone_e164, status, source, last_called_at, sms_opt_out')
       .not('phone_e164', 'is', null)
       .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      setCandidates(data);
-    }
+    if (data) setCandidates(data);
     setLoading(false);
   }
 
-  function applyFilters() {
-    let filtered = [...candidates];
-
-    // Status filter
-    if (filter.status !== 'all') {
-      filtered = filtered.filter(c => c.status === filter.status);
+  async function loadConversations() {
+    const { data } = await supabase
+      .from('sms_messages')
+      .select('*, candidates(id, name, roles, status)')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (data) {
+      // Group by phone
+      const grouped = new Map<string, any[]>();
+      data.forEach(msg => {
+        const existing = grouped.get(msg.phone_e164) || [];
+        existing.push(msg);
+        grouped.set(msg.phone_e164, existing);
+      });
+      const convos = Array.from(grouped.entries()).map(([phone, msgs]) => ({
+        phone,
+        name: msgs.find(m => m.candidates?.name)?.candidates?.name || null,
+        messages: msgs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
+        lastMessage: msgs[0],
+        hasResponse: msgs.some(m => m.direction === 'inbound'),
+        latestIntent: msgs.find(m => m.direction === 'inbound')?.ai_intent
+      }));
+      setConversations(convos);
     }
-
-    // Source filter  
-    if (filter.source !== 'all') {
-      filtered = filtered.filter(c => c.source === filter.source);
-    }
-
-    // Called filter
-    if (filter.hasBeenCalled === 'called') {
-      filtered = filtered.filter(c => c.last_called_at !== null);
-    } else if (filter.hasBeenCalled === 'not_called') {
-      filtered = filtered.filter(c => c.last_called_at === null);
-    }
-
-    // Search filter
-    if (filter.search) {
-      const query = filter.search.toLowerCase();
-      filtered = filtered.filter(c => 
-        c.name?.toLowerCase().includes(query) ||
-        c.phone_e164?.includes(query)
-      );
-    }
-
-    setFilteredCandidates(filtered);
   }
 
-  function personalizeMessage(template: string, candidate: Candidate): string {
+  const filteredCandidates = candidates.filter(c => {
+    if (!c.phone_e164) return false;
+    if (excludeOptOut && c.sms_opt_out) return false;
+    if (filterStatus !== 'all' && c.status !== filterStatus) return false;
+    if (filterSource !== 'all' && c.source !== filterSource) return false;
+    if (filterCalled === 'called' && !c.last_called_at) return false;
+    if (filterCalled === 'not-called' && c.last_called_at) return false;
+    return true;
+  });
+
+  const sources = [...new Set(candidates.map(c => c.source).filter(Boolean))];
+  const charCount = message.length;
+  const smsCount = Math.ceil(charCount / 160);
+  const totalSeconds = filteredCandidates.length * sendDelay;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  const personalizeMessage = (template: string, candidate: Candidate) => {
     const firstName = candidate.name?.split(' ')[0] || 'there';
-    return template
-      .replace(/{name}/g, firstName)
-      .replace(/{full_name}/g, candidate.name || 'there')
-      .replace(/{phone}/g, candidate.phone_e164 || '');
-  }
+    return template.replace(/{name}/g, firstName).replace(/{full_name}/g, candidate.name || 'Candidate');
+  };
 
-  function exportCSV() {
-    const rows = filteredCandidates.map(c => ({
-      name: c.name,
-      phone: c.phone_e164,
-      message: personalizeMessage(message, c)
-    }));
-
-    const csv = [
-      'Name,Phone,Message',
-      ...rows.map(r => `"${r.name}","${r.phone}","${r.message.replace(/"/g, '""')}"`)
-    ].join('\n');
-
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `sms_campaign_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  async function sendViaAndroidGateway(phone: string, text: string): Promise<boolean> {
+  async function sendViaGateway(phone: string, text: string): Promise<boolean> {
     try {
-      const response = await fetch(`${androidGatewayUrl}/send`, {
+      const response = await fetch(`${gatewayUrl}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, message: text })
       });
       return response.ok;
-    } catch (e) {
-      console.error('Android gateway error:', e);
-      return false;
-    }
+    } catch { return false; }
   }
 
   async function startSending() {
     if (filteredCandidates.length === 0) return;
-    
     setIsSending(true);
-    sendingRef.current = true;
-    pausedRef.current = false;
-    setSendingProgress(0);
-    
-    // Initialize log
-    const initialLog: SMSLog[] = filteredCandidates.map(c => ({
-      phone: c.phone_e164,
-      name: c.name,
-      status: 'pending'
-    }));
-    setSmsLog(initialLog);
+    setIsPaused(false);
+    abortRef.current = false;
+    setCurrentIndex(0);
+    setSendLog([]);
+
+    // Create campaign record
+    const { data: campaign } = await supabase.from('sms_campaigns').insert({
+      name: campaignName || `Campaign ${new Date().toLocaleDateString('en-GB')}`,
+      template: message,
+      total_recipients: filteredCandidates.length,
+      status: 'sending',
+      started_at: new Date().toISOString()
+    }).select().single();
 
     for (let i = 0; i < filteredCandidates.length; i++) {
-      // Check if stopped or paused
-      if (!sendingRef.current) break;
-      
-      while (pausedRef.current && sendingRef.current) {
-        await sleep(1000);
-      }
-      
-      if (!sendingRef.current) break;
+      if (abortRef.current) break;
+      while (isPaused && !abortRef.current) await new Promise(r => setTimeout(r, 500));
+      if (abortRef.current) break;
 
       const candidate = filteredCandidates[i];
       const personalizedMsg = personalizeMessage(message, candidate);
+      setCurrentIndex(i);
+      setSendLog(prev => [...prev, { phone: candidate.phone_e164, name: candidate.name || 'Unknown', status: 'pending' }]);
 
-      // Update log to show sending
-      setSmsLog(prev => prev.map((log, idx) => 
-        idx === i ? { ...log, status: 'pending' } : log
-      ));
-
-      let success = false;
-
-      if (gatewayType === 'android') {
-        success = await sendViaAndroidGateway(candidate.phone_e164, personalizedMsg);
-      } else if (gatewayType === 'manual') {
-        // For manual mode, just mark as "ready" and user copies
-        success = true;
+      try {
+        const success = await sendViaGateway(candidate.phone_e164, personalizedMsg);
+        if (success) {
+          await supabase.from('sms_messages').insert({
+            candidate_id: candidate.id,
+            phone_e164: candidate.phone_e164,
+            direction: 'outbound',
+            message_text: personalizedMsg,
+            campaign_id: campaign?.id,
+            status: 'sent',
+            sent_at: new Date().toISOString()
+          });
+          setSendLog(prev => prev.map((item, idx) => idx === prev.length - 1 ? { ...item, status: 'sent' } : item));
+        } else {
+          setSendLog(prev => prev.map((item, idx) => idx === prev.length - 1 ? { ...item, status: 'failed', error: 'Gateway error' } : item));
+        }
+      } catch (err: any) {
+        setSendLog(prev => prev.map((item, idx) => idx === prev.length - 1 ? { ...item, status: 'failed', error: err.message } : item));
       }
 
-      // Update log
-      setSmsLog(prev => prev.map((log, idx) => 
-        idx === i ? { 
-          ...log, 
-          status: success ? 'sent' : 'failed',
-          sentAt: new Date().toISOString()
-        } : log
-      ));
-
-      setSendingProgress(i + 1);
-
-      // Wait before next message (rate limiting)
-      if (i < filteredCandidates.length - 1 && sendingRef.current) {
-        await sleep(sendInterval * 1000);
+      if (i < filteredCandidates.length - 1 && !abortRef.current) {
+        await new Promise(r => setTimeout(r, sendDelay * 1000));
       }
     }
 
+    if (campaign?.id) {
+      await supabase.from('sms_campaigns').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', campaign.id);
+    }
     setIsSending(false);
-    sendingRef.current = false;
   }
 
-  function pauseSending() {
-    pausedRef.current = !pausedRef.current;
-    setIsPaused(pausedRef.current);
+  function exportToCSV() {
+    const rows = [['Phone', 'Name', 'Message']];
+    filteredCandidates.forEach(c => rows.push([c.phone_e164, c.name || '', personalizeMessage(message, c)]));
+    const csv = rows.map(r => r.map(cell => `"${cell}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `sms-campaign-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
   }
 
-  function stopSending() {
-    sendingRef.current = false;
-    pausedRef.current = false;
-    setIsSending(false);
-    setIsPaused(false);
-  }
-
-  function sleep(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  // Get unique values for filters
-  const uniqueStatuses = [...new Set(candidates.map(c => c.status).filter(Boolean))];
-  const uniqueSources = [...new Set(candidates.map(c => c.source).filter(Boolean))];
-
-  const charCount = message.length;
-  const smsCount = Math.ceil(charCount / 160);
-
-  if (loading) {
-    return (
-      <div style={{ padding: '40px', textAlign: 'center' }}>
-        <div style={{ fontSize: '24px', marginBottom: '10px' }}>📱</div>
-        <div style={{ color: '#6b7280' }}>Loading candidates...</div>
-      </div>
-    );
-  }
+  const getIntentColor = (intent: string | null) => {
+    switch (intent) {
+      case 'interested': return { bg: '#dcfce7', text: '#166534' };
+      case 'callback_request': return { bg: '#dbeafe', text: '#1e40af' };
+      case 'question': return { bg: '#fef3c7', text: '#92400e' };
+      case 'not_interested': case 'stop_request': return { bg: '#fee2e2', text: '#991b1b' };
+      default: return { bg: '#f3f4f6', text: '#6b7280' };
+    }
+  };
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937', marginBottom: '8px' }}>
-          📱 SMS Campaign
-        </h1>
-        <p style={{ color: '#6b7280' }}>
-          Send bulk SMS to candidates using your business phone. Rate-limited to avoid blocking.
-        </p>
+    <div style={{ background: '#f8fafc', minHeight: '100%' }}>
+      <style>{`
+        .sms-tabs{display:flex;border-bottom:1px solid #e5e7eb;background:#fff;padding:0 20px}
+        .sms-tab{padding:14px 24px;font-size:14px;font-weight:500;color:#6b7280;cursor:pointer;border-bottom:2px solid transparent}
+        .sms-tab:hover{color:#111}
+        .sms-tab.active{color:#4f46e5;border-bottom-color:#4f46e5}
+        .sms-badge{margin-left:8px;padding:2px 8px;background:#dcfce7;color:#166534;border-radius:10px;font-size:11px;font-weight:600}
+        .sms-compose{display:grid;grid-template-columns:1fr 380px;gap:24px;padding:24px}
+        @media(max-width:1100px){.sms-compose{grid-template-columns:1fr}}
+        .sms-panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px}
+        .sms-panel-header{padding:16px 20px;border-bottom:1px solid #e5e7eb;font-size:15px;font-weight:600}
+        .sms-panel-body{padding:20px}
+        .sms-input{width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box}
+        .sms-textarea{width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:8px;font-size:14px;resize:vertical;min-height:100px;box-sizing:border-box;font-family:inherit}
+        .sms-filters{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+        .sms-filter select{padding:8px 12px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px}
+        .sms-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+        .sms-stat{text-align:center;padding:12px;background:#f9fafb;border-radius:8px}
+        .sms-stat strong{display:block;font-size:20px;color:#111}
+        .sms-stat small{font-size:10px;color:#6b7280}
+        .sms-btn{padding:12px 20px;font-size:14px;font-weight:500;border-radius:8px;cursor:pointer;border:none;width:100%;margin-bottom:8px}
+        .sms-btn.primary{background:#22c55e;color:#fff}
+        .sms-btn.secondary{background:#f3f4f6;color:#374151}
+        .sms-btn.danger{background:#fee2e2;color:#dc2626}
+        .sms-progress{margin-top:16px;padding:12px;background:#f9fafb;border-radius:8px}
+        .sms-progress-bar{height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden}
+        .sms-progress-fill{height:100%;background:#4f46e5;transition:width .3s}
+        .sms-log{max-height:200px;overflow-y:auto;font-size:12px;margin-top:12px}
+        .sms-log-item{padding:6px 10px;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between}
+        .sms-log-item.sent{background:#f0fdf4}
+        .sms-log-item.failed{background:#fef2f2}
+        .sms-convo-list{max-height:500px;overflow-y:auto}
+        .sms-convo{padding:12px 16px;border-bottom:1px solid #f3f4f6;cursor:pointer;display:flex;gap:12px;align-items:center}
+        .sms-convo:hover{background:#f9fafb}
+        .sms-convo.active{background:#eef2ff}
+        .sms-convo-avatar{width:40px;height:40px;border-radius:10px;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600}
+        .sms-convo-info{flex:1;min-width:0}
+        .sms-convo-name{font-weight:600;font-size:14px}
+        .sms-convo-preview{font-size:12px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sms-detail{flex:1;display:flex;flex-direction:column}
+        .sms-detail-header{padding:16px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center}
+        .sms-messages{flex:1;padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+        .sms-message{max-width:80%;padding:10px 14px;border-radius:12px}
+        .sms-message.out{background:#4f46e5;color:#fff;align-self:flex-end}
+        .sms-message.in{background:#f3f4f6;align-self:flex-start}
+        .sms-ai-box{margin-top:8px;padding:10px;background:#fefce8;border:1px solid #fef08a;border-radius:8px;font-size:12px}
+      `}</style>
+
+      {/* Tabs */}
+      <div className="sms-tabs">
+        <div className={`sms-tab ${activeTab === 'compose' ? 'active' : ''}`} onClick={() => setActiveTab('compose')}>
+          📝 Compose
+        </div>
+        <div className={`sms-tab ${activeTab === 'conversations' ? 'active' : ''}`} onClick={() => { setActiveTab('conversations'); loadConversations(); }}>
+          💬 Conversations
+          {conversations.filter(c => c.hasResponse).length > 0 && (
+            <span className="sms-badge">{conversations.filter(c => c.hasResponse).length}</span>
+          )}
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-        
-        {/* Left Column - Message & Settings */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          
-          {/* Message Template */}
-          <div style={{
-            background: 'white',
-            borderRadius: '12px',
-            padding: '20px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-          }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937', marginBottom: '12px' }}>
-              ✉️ Message Template
-            </h2>
-            
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              style={{
-                width: '100%',
-                height: '150px',
-                padding: '12px',
-                borderRadius: '8px',
-                border: '1px solid #d1d5db',
-                fontSize: '14px',
-                resize: 'vertical',
-                fontFamily: 'inherit'
-              }}
-              placeholder="Type your message here..."
-            />
-            
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'space-between',
-              marginTop: '8px',
-              fontSize: '13px',
-              color: '#6b7280'
-            }}>
-              <span>Variables: {'{name}'}, {'{full_name}'}</span>
-              <span style={{ color: charCount > 160 ? '#f59e0b' : '#6b7280' }}>
-                {charCount} chars ({smsCount} SMS)
-              </span>
+      {/* Compose Tab */}
+      {activeTab === 'compose' && (
+        <div className="sms-compose">
+          <div>
+            <div className="sms-panel">
+              <div className="sms-panel-header">📝 Message Template</div>
+              <div className="sms-panel-body">
+                <input className="sms-input" placeholder="Campaign name (optional)" value={campaignName} onChange={e => setCampaignName(e.target.value)} />
+                <textarea className="sms-textarea" value={message} onChange={e => setMessage(e.target.value)} placeholder="Type message... Use {name} for first name" />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6b7280', marginTop: 8 }}>
+                  <span>Variables: {'{name}'}, {'{full_name}'}</span>
+                  <span>{charCount} chars • {smsCount} SMS</span>
+                </div>
+              </div>
             </div>
 
-            {/* Preview */}
-            <div style={{
-              marginTop: '16px',
-              padding: '12px',
-              background: '#f0fdf4',
-              borderRadius: '8px',
-              border: '1px solid #86efac'
-            }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#166534', marginBottom: '4px' }}>
-                Preview (first candidate):
+            <div className="sms-panel" style={{ marginTop: 20 }}>
+              <div className="sms-panel-header">🎯 Target ({filteredCandidates.length} recipients)</div>
+              <div className="sms-panel-body">
+                <div className="sms-filters">
+                  <div className="sms-filter">
+                    <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+                      <option value="all">All Statuses</option>
+                      <option value="new">New</option>
+                      <option value="screening">Screening</option>
+                    </select>
+                  </div>
+                  <div className="sms-filter">
+                    <select value={filterCalled} onChange={e => setFilterCalled(e.target.value)}>
+                      <option value="all">All</option>
+                      <option value="called">Called</option>
+                      <option value="not-called">Not Called</option>
+                    </select>
+                  </div>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={excludeOptOut} onChange={e => setExcludeOptOut(e.target.checked)} />
+                  Exclude opted-out candidates
+                </label>
               </div>
-              <div style={{ fontSize: '14px', color: '#166534' }}>
-                {filteredCandidates[0] 
-                  ? personalizeMessage(message, filteredCandidates[0])
-                  : 'No candidates selected'}
-              </div>
+            </div>
+
+            {/* AI Info */}
+            <div className="sms-ai-box" style={{ marginTop: 20 }}>
+              <strong>🤖 AI Response Analysis</strong>
+              <p style={{ margin: '8px 0 0', color: '#854d0e' }}>
+                When candidates reply, AI automatically analyzes responses to detect interest level, 
+                callback requests, and opt-outs. View analyzed responses in the Conversations tab.
+              </p>
             </div>
           </div>
 
-          {/* Send Settings */}
-          <div style={{
-            background: 'white',
-            borderRadius: '12px',
-            padding: '20px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-          }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937', marginBottom: '12px' }}>
-              ⚙️ Send Settings
-            </h2>
+          <div>
+            <div className="sms-panel">
+              <div className="sms-panel-header">🚀 Send</div>
+              <div className="sms-panel-body">
+                <div className="sms-stats">
+                  <div className="sms-stat"><strong>{filteredCandidates.length}</strong><small>Recipients</small></div>
+                  <div className="sms-stat"><strong>{smsCount}</strong><small>SMS each</small></div>
+                  <div className="sms-stat"><strong>{sendDelay}s</strong><small>Delay</small></div>
+                  <div className="sms-stat"><strong>{hours}h {minutes}m</strong><small>Est. time</small></div>
+                </div>
 
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-                Delay between messages (seconds)
-              </label>
-              <input
-                type="number"
-                value={sendInterval}
-                onChange={(e) => setSendInterval(Math.max(5, parseInt(e.target.value) || 30))}
-                min="5"
-                max="300"
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '8px',
-                  border: '1px solid #d1d5db',
-                  width: '100px'
-                }}
-              />
-              <span style={{ marginLeft: '8px', fontSize: '13px', color: '#6b7280' }}>
-                (min 5 sec, recommended 30 sec)
-              </span>
-            </div>
+                <input className="sms-input" value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="Gateway URL" />
+                
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ fontSize: 12, color: '#6b7280' }}>Delay: {sendDelay}s</label>
+                  <input type="range" min="5" max="120" value={sendDelay} onChange={e => setSendDelay(parseInt(e.target.value))} style={{ width: '100%' }} />
+                </div>
 
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-                Send Method
-              </label>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                {[
-                  { id: 'manual', label: '📋 Copy & Send', desc: 'Copy each message manually' },
-                  { id: 'csv', label: '📄 Export CSV', desc: 'Download list for bulk send app' },
-                  { id: 'android', label: '📱 Android Gateway', desc: 'Auto-send via phone app' },
-                ].map(method => (
-                  <button
-                    key={method.id}
-                    onClick={() => setGatewayType(method.id as any)}
-                    style={{
-                      flex: 1,
-                      padding: '12px',
-                      borderRadius: '8px',
-                      border: gatewayType === method.id ? '2px solid #3b82f6' : '1px solid #d1d5db',
-                      background: gatewayType === method.id ? '#eff6ff' : 'white',
-                      cursor: 'pointer',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div style={{ fontWeight: '500', fontSize: '14px' }}>{method.label}</div>
-                    <div style={{ fontSize: '11px', color: '#6b7280' }}>{method.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {gatewayType === 'android' && (
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-                  Android Gateway URL
-                </label>
-                <input
-                  type="text"
-                  value={androidGatewayUrl}
-                  onChange={(e) => setAndroidGatewayUrl(e.target.value)}
-                  placeholder="http://192.168.1.100:8080"
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #d1d5db'
-                  }}
-                />
-                <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
-                  Install "SMS Gateway API" app on your Android phone and enter its URL here
-                </p>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-              {gatewayType === 'csv' ? (
-                <button
-                  onClick={exportCSV}
-                  disabled={filteredCandidates.length === 0}
-                  style={{
-                    flex: 1,
-                    padding: '12px 20px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    background: '#3b82f6',
-                    color: 'white',
-                    fontWeight: '600',
-                    cursor: filteredCandidates.length === 0 ? 'not-allowed' : 'pointer',
-                    opacity: filteredCandidates.length === 0 ? 0.5 : 1
-                  }}
-                >
-                  📄 Export CSV ({filteredCandidates.length} contacts)
-                </button>
-              ) : (
-                <>
-                  {!isSending ? (
-                    <button
-                      onClick={startSending}
-                      disabled={filteredCandidates.length === 0}
-                      style={{
-                        flex: 1,
-                        padding: '12px 20px',
-                        borderRadius: '8px',
-                        border: 'none',
-                        background: '#22c55e',
-                        color: 'white',
-                        fontWeight: '600',
-                        cursor: filteredCandidates.length === 0 ? 'not-allowed' : 'pointer',
-                        opacity: filteredCandidates.length === 0 ? 0.5 : 1
-                      }}
-                    >
-                      🚀 Start Sending ({filteredCandidates.length} messages)
+                {!isSending ? (
+                  <>
+                    <button className="sms-btn primary" onClick={startSending} disabled={filteredCandidates.length === 0}>
+                      📱 Start Sending ({filteredCandidates.length})
                     </button>
-                  ) : (
-                    <>
-                      <button
-                        onClick={pauseSending}
-                        style={{
-                          flex: 1,
-                          padding: '12px 20px',
-                          borderRadius: '8px',
-                          border: 'none',
-                          background: isPaused ? '#22c55e' : '#f59e0b',
-                          color: 'white',
-                          fontWeight: '600',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {isPaused ? '▶️ Resume' : '⏸️ Pause'}
-                      </button>
-                      <button
-                        onClick={stopSending}
-                        style={{
-                          padding: '12px 20px',
-                          borderRadius: '8px',
-                          border: 'none',
-                          background: '#ef4444',
-                          color: 'white',
-                          fontWeight: '600',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        ⏹️ Stop
-                      </button>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
+                    <button className="sms-btn secondary" onClick={exportToCSV}>📥 Export CSV</button>
+                  </>
+                ) : (
+                  <>
+                    <button className="sms-btn secondary" onClick={() => setIsPaused(!isPaused)}>
+                      {isPaused ? '▶️ Resume' : '⏸️ Pause'}
+                    </button>
+                    <button className="sms-btn danger" onClick={() => { abortRef.current = true; setIsSending(false); }}>
+                      ⏹️ Stop
+                    </button>
+                  </>
+                )}
 
-            {/* Progress */}
-            {isSending && (
-              <div style={{ marginTop: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '13px', color: '#6b7280' }}>
-                    {isPaused ? 'Paused' : 'Sending...'}
-                  </span>
-                  <span style={{ fontSize: '13px', fontWeight: '600', color: '#1f2937' }}>
-                    {sendingProgress} / {filteredCandidates.length}
-                  </span>
-                </div>
-                <div style={{
-                  height: '8px',
-                  background: '#e5e7eb',
-                  borderRadius: '4px',
-                  overflow: 'hidden'
-                }}>
-                  <div style={{
-                    height: '100%',
-                    width: `${(sendingProgress / filteredCandidates.length) * 100}%`,
-                    background: isPaused ? '#f59e0b' : '#22c55e',
-                    transition: 'width 0.3s'
-                  }} />
-                </div>
-                <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
-                  Est. time remaining: {Math.ceil((filteredCandidates.length - sendingProgress) * sendInterval / 60)} min
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Column - Filters & Recipients */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          
-          {/* Filters */}
-          <div style={{
-            background: 'white',
-            borderRadius: '12px',
-            padding: '20px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-          }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937', marginBottom: '12px' }}>
-              🔍 Filter Recipients
-            </h2>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-                  Status
-                </label>
-                <select
-                  value={filter.status}
-                  onChange={(e) => setFilter({ ...filter, status: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #d1d5db'
-                  }}
-                >
-                  <option value="all">All Statuses</option>
-                  {uniqueStatuses.map(s => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-                  Source
-                </label>
-                <select
-                  value={filter.source}
-                  onChange={(e) => setFilter({ ...filter, source: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #d1d5db'
-                  }}
-                >
-                  <option value="all">All Sources</option>
-                  {uniqueSources.map(s => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-                  Called Status
-                </label>
-                <select
-                  value={filter.hasBeenCalled}
-                  onChange={(e) => setFilter({ ...filter, hasBeenCalled: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #d1d5db'
-                  }}
-                >
-                  <option value="all">All</option>
-                  <option value="not_called">Never Called</option>
-                  <option value="called">Already Called</option>
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-                  Search
-                </label>
-                <input
-                  type="text"
-                  value={filter.search}
-                  onChange={(e) => setFilter({ ...filter, search: e.target.value })}
-                  placeholder="Name or phone..."
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #d1d5db'
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Stats */}
-            <div style={{
-              marginTop: '16px',
-              padding: '12px',
-              background: '#f9fafb',
-              borderRadius: '8px',
-              display: 'flex',
-              justifyContent: 'space-between'
-            }}>
-              <div>
-                <div style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937' }}>
-                  {filteredCandidates.length}
-                </div>
-                <div style={{ fontSize: '12px', color: '#6b7280' }}>Recipients</div>
-              </div>
-              <div>
-                <div style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937' }}>
-                  {candidates.length}
-                </div>
-                <div style={{ fontSize: '12px', color: '#6b7280' }}>Total Candidates</div>
-              </div>
-              <div>
-                <div style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937' }}>
-                  {Math.ceil(filteredCandidates.length * sendInterval / 60)}
-                </div>
-                <div style={{ fontSize: '12px', color: '#6b7280' }}>Est. Minutes</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Recipients Preview */}
-          <div style={{
-            background: 'white',
-            borderRadius: '12px',
-            padding: '20px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-            flex: 1,
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column'
-          }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '600', color: '#1f2937', marginBottom: '12px' }}>
-              👥 Recipients ({filteredCandidates.length})
-            </h2>
-
-            <div style={{ 
-              flex: 1, 
-              overflowY: 'auto',
-              maxHeight: '400px'
-            }}>
-              {filteredCandidates.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '40px', color: '#6b7280' }}>
-                  No candidates match your filters
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {filteredCandidates.slice(0, 100).map((candidate, index) => {
-                    const logEntry = smsLog.find(l => l.phone === candidate.phone_e164);
-                    return (
-                      <div
-                        key={candidate.id}
-                        style={{
-                          padding: '8px 12px',
-                          borderRadius: '6px',
-                          background: logEntry?.status === 'sent' ? '#f0fdf4' : 
-                                     logEntry?.status === 'failed' ? '#fef2f2' : '#f9fafb',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '12px',
-                          fontSize: '13px'
-                        }}
-                      >
-                        <span style={{ color: '#9ca3af', width: '24px' }}>{index + 1}</span>
-                        <span style={{ flex: 1, fontWeight: '500', color: '#1f2937' }}>
-                          {candidate.name}
-                        </span>
-                        <span style={{ color: '#6b7280', fontFamily: 'monospace' }}>
-                          {candidate.phone_e164}
-                        </span>
-                        {logEntry && (
-                          <span style={{
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            fontSize: '11px',
-                            background: logEntry.status === 'sent' ? '#dcfce7' : 
-                                       logEntry.status === 'failed' ? '#fee2e2' : '#e5e7eb',
-                            color: logEntry.status === 'sent' ? '#166534' : 
-                                  logEntry.status === 'failed' ? '#991b1b' : '#6b7280'
-                          }}>
-                            {logEntry.status === 'sent' ? '✓ Sent' : 
-                             logEntry.status === 'failed' ? '✗ Failed' : '⏳'}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {filteredCandidates.length > 100 && (
-                    <div style={{ textAlign: 'center', padding: '8px', color: '#6b7280', fontSize: '13px' }}>
-                      ... and {filteredCandidates.length - 100} more
+                {isSending && (
+                  <div className="sms-progress">
+                    <div className="sms-progress-bar">
+                      <div className="sms-progress-fill" style={{ width: `${(currentIndex / filteredCandidates.length) * 100}%` }} />
                     </div>
-                  )}
-                </div>
-              )}
+                    <div style={{ fontSize: 12, marginTop: 8, textAlign: 'center' }}>
+                      {currentIndex} / {filteredCandidates.length} {isPaused ? '(Paused)' : ''}
+                    </div>
+                  </div>
+                )}
+
+                {sendLog.length > 0 && (
+                  <div className="sms-log">
+                    {sendLog.slice().reverse().map((log, i) => (
+                      <div key={i} className={`sms-log-item ${log.status}`}>
+                        <span>{log.name}</span>
+                        <span>{log.status === 'sent' ? '✓' : log.status === 'failed' ? '✗' : '...'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Manual Send Modal - Shows one message at a time for copy/paste */}
-      {isSending && gatewayType === 'manual' && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            background: 'white',
-            borderRadius: '16px',
-            padding: '24px',
-            maxWidth: '500px',
-            width: '90%'
-          }}>
-            <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>
-              📱 Send Message {sendingProgress + 1} of {filteredCandidates.length}
-            </h3>
-            
-            {filteredCandidates[sendingProgress] && (
+      {/* Conversations Tab */}
+      {activeTab === 'conversations' && (
+        <div style={{ display: 'flex', height: 'calc(100vh - 180px)' }}>
+          {/* List */}
+          <div style={{ width: 350, borderRight: '1px solid #e5e7eb', background: '#fff' }}>
+            <div style={{ padding: 16, borderBottom: '1px solid #e5e7eb', fontWeight: 600 }}>
+              💬 {conversations.length} Conversations
+            </div>
+            <div className="sms-convo-list">
+              {conversations.length === 0 ? (
+                <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>
+                  No conversations yet. Send your first campaign!
+                </div>
+              ) : conversations.map(convo => {
+                const intentColors = getIntentColor(convo.latestIntent);
+                return (
+                  <div 
+                    key={convo.phone} 
+                    className={`sms-convo ${selectedConvo?.phone === convo.phone ? 'active' : ''}`}
+                    onClick={() => setSelectedConvo(convo)}
+                  >
+                    <div className="sms-convo-avatar">{convo.name?.[0]?.toUpperCase() || '?'}</div>
+                    <div className="sms-convo-info">
+                      <div className="sms-convo-name">{convo.name || convo.phone}</div>
+                      <div className="sms-convo-preview">
+                        {convo.lastMessage?.direction === 'inbound' ? '← ' : '→ '}
+                        {convo.lastMessage?.message_text?.substring(0, 40)}...
+                      </div>
+                    </div>
+                    {convo.latestIntent && (
+                      <span style={{ padding: '4px 8px', borderRadius: 12, fontSize: 10, fontWeight: 600, background: intentColors.bg, color: intentColors.text }}>
+                        {convo.latestIntent}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Detail */}
+          <div className="sms-detail" style={{ background: '#fff' }}>
+            {selectedConvo ? (
               <>
-                <div style={{ marginBottom: '12px' }}>
-                  <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>To:</div>
-                  <div style={{ 
-                    fontSize: '18px', 
-                    fontWeight: '600',
-                    fontFamily: 'monospace'
-                  }}>
-                    {filteredCandidates[sendingProgress].phone_e164}
+                <div className="sms-detail-header">
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{selectedConvo.name || 'Unknown'}</div>
+                    <div style={{ fontSize: 13, color: '#6b7280' }}>{selectedConvo.phone}</div>
                   </div>
-                  <div style={{ fontSize: '14px', color: '#6b7280' }}>
-                    {filteredCandidates[sendingProgress].name}
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>Message:</div>
-                  <div style={{
-                    padding: '12px',
-                    background: '#f9fafb',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    lineHeight: '1.5'
-                  }}>
-                    {personalizeMessage(message, filteredCandidates[sendingProgress])}
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(
-                        personalizeMessage(message, filteredCandidates[sendingProgress])
-                      );
-                    }}
-                    style={{
-                      flex: 1,
-                      padding: '12px',
-                      borderRadius: '8px',
-                      border: '1px solid #d1d5db',
-                      background: 'white',
-                      cursor: 'pointer',
-                      fontWeight: '500'
-                    }}
-                  >
-                    📋 Copy Message
-                  </button>
-                  <a
-                    href={`sms:${filteredCandidates[sendingProgress].phone_e164}`}
-                    style={{
-                      flex: 1,
-                      padding: '12px',
-                      borderRadius: '8px',
-                      border: 'none',
-                      background: '#22c55e',
-                      color: 'white',
-                      textDecoration: 'none',
-                      textAlign: 'center',
-                      fontWeight: '500'
-                    }}
-                  >
-                    📱 Open SMS App
+                  <a href={`tel:${selectedConvo.phone}`} style={{ padding: '8px 16px', background: '#22c55e', color: '#fff', borderRadius: 8, textDecoration: 'none', fontSize: 13 }}>
+                    📞 Call
                   </a>
                 </div>
-
-                <div style={{ 
-                  marginTop: '16px',
-                  display: 'flex',
-                  justifyContent: 'space-between'
-                }}>
-                  <button
-                    onClick={stopSending}
-                    style={{
-                      padding: '8px 16px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      background: 'white',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    ✗ Stop Campaign
-                  </button>
-                  <button
-                    onClick={() => setSendingProgress(prev => prev + 1)}
-                    style={{
-                      padding: '8px 16px',
-                      borderRadius: '6px',
-                      border: 'none',
-                      background: '#3b82f6',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontWeight: '500'
-                    }}
-                  >
-                    Next → ({filteredCandidates.length - sendingProgress - 1} left)
-                  </button>
+                <div className="sms-messages">
+                  {selectedConvo.messages.map((msg: any) => (
+                    <div key={msg.id}>
+                      <div className={`sms-message ${msg.direction === 'outbound' ? 'out' : 'in'}`}>
+                        {msg.message_text}
+                        <div style={{ fontSize: 10, opacity: 0.7, marginTop: 4 }}>
+                          {new Date(msg.created_at).toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}
+                        </div>
+                      </div>
+                      {msg.direction === 'inbound' && msg.ai_summary && (
+                        <div className="sms-ai-box" style={{ maxWidth: '80%', marginTop: 4 }}>
+                          <strong>🤖 AI:</strong> {msg.ai_summary}
+                          {msg.ai_suggested_action && <span style={{ marginLeft: 8 }}>→ {msg.ai_suggested_action.replace(/_/g, ' ')}</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </>
+            ) : (
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>
+                Select a conversation
+              </div>
             )}
           </div>
         </div>
