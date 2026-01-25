@@ -238,8 +238,7 @@ export async function POST(request: NextRequest) {
         .from('candidates')
         .update({ 
           sms_opt_out: true,
-          sms_interest_level: 'not_interested',
-          updated_at: new Date().toISOString()
+          sms_interest_level: 'not_interested'
         })
         .eq('id', candidate.id);
     }
