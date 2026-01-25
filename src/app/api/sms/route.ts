@@ -152,14 +152,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the candidate by phone number
-    const { data: candidate } = await supabase
+    const { data: candidate, error: candidateError } = await supabase
       .from('candidates')
       .select('id, name')
       .eq('phone_e164', normalizedPhone)
       .single();
+    
+    // It's OK if candidate not found - just log it
+    if (candidateError && candidateError.code !== 'PGRST116') {
+      console.log('Candidate lookup error (non-fatal):', candidateError);
+    }
 
     // Find the most recent outbound message to this number (for context)
-    const { data: lastOutbound } = await supabase
+    const { data: lastOutbound, error: outboundError } = await supabase
       .from('sms_messages')
       .select('message_text, campaign_id')
       .eq('phone_e164', normalizedPhone)
@@ -167,13 +172,34 @@ export async function POST(request: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
+    
+    // It's OK if no outbound message found
+    if (outboundError && outboundError.code !== 'PGRST116') {
+      console.log('Outbound lookup error (non-fatal):', outboundError);
+    }
 
     // Analyze the message with Claude
-    const analysis = await analyzeWithClaude(
-      messageText,
-      lastOutbound?.message_text || null,
-      candidate?.name || null
-    );
+    let analysis;
+    try {
+      analysis = await analyzeWithClaude(
+        messageText,
+        lastOutbound?.message_text || null,
+        candidate?.name || null
+      );
+    } catch (analysisError) {
+      console.error('Claude analysis error:', analysisError);
+      // Use default analysis if Claude fails
+      analysis = {
+        sentiment: 'neutral',
+        intent: 'unclear',
+        availability: null,
+        summary: 'Unable to analyze message',
+        suggested_action: 'no_action',
+        confidence: 0,
+        is_opt_out: messageText.toUpperCase().includes('STOP'),
+        extracted_info: {},
+      };
+    }
 
     // Store the incoming message with analysis
     const { data: smsRecord, error: insertError } = await supabase
@@ -199,7 +225,11 @@ export async function POST(request: NextRequest) {
 
     if (insertError) {
       console.error('Error storing SMS:', insertError);
-      return NextResponse.json({ error: 'Failed to store message' }, { status: 500 });
+      return NextResponse.json({ 
+        error: 'Failed to store message', 
+        details: insertError.message,
+        code: insertError.code 
+      }, { status: 500 });
     }
 
     // If opt-out detected, update candidate
