@@ -4,11 +4,11 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
 const anthropic = new Anthropic({
-  apiKey: process.env.CLAUDE_API_KEY!,
+  apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
 interface SMSAnalysis {
@@ -114,15 +114,31 @@ Set is_opt_out to true if the message contains: STOP, UNSUBSCRIBE, REMOVE, "don'
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    console.log('SMS webhook received:', JSON.stringify(body, null, 2));
     
-    // Support multiple SMS gateway formats
-    const phoneNumber = body.from || body.phone || body.sender || body.phoneNumber;
-    const messageText = body.message || body.text || body.body || body.smsMessage;
-    const timestamp = body.timestamp || body.receivedAt || new Date().toISOString();
+    // Support SMS Gateway by capcom6 format AND other gateway formats
+    let phoneNumber: string | undefined;
+    let messageText: string | undefined;
+    let timestamp: string;
+    
+    // SMS Gateway (capcom6) format: { event: "sms:received", payload: { message, phoneNumber, receivedAt } }
+    if (body.event === 'sms:received' && body.payload) {
+      phoneNumber = body.payload.phoneNumber;
+      messageText = body.payload.message;
+      timestamp = body.payload.receivedAt || new Date().toISOString();
+      console.log('Parsed as SMS Gateway format:', { phoneNumber, messageText });
+    } else {
+      // Fallback: Support multiple other SMS gateway formats
+      phoneNumber = body.from || body.phone || body.sender || body.phoneNumber;
+      messageText = body.message || body.text || body.body || body.smsMessage;
+      timestamp = body.timestamp || body.receivedAt || new Date().toISOString();
+      console.log('Parsed as generic format:', { phoneNumber, messageText });
+    }
 
     if (!phoneNumber || !messageText) {
+      console.log('Missing required fields:', { phoneNumber, messageText, body });
       return NextResponse.json(
-        { error: 'Missing phone number or message text' },
+        { error: 'Missing phone number or message text', received: body },
         { status: 400 }
       );
     }
