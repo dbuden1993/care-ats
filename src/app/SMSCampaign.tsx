@@ -38,6 +38,31 @@ export default function SMSCampaignView() {
   const [gatewayUsername, setGatewayUsername] = useState('');
   const [gatewayPassword, setGatewayPassword] = useState('');
   const [sendDelay, setSendDelay] = useState(30);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+
+  // Load saved gateway settings from localStorage on mount
+  useEffect(() => {
+    const savedSettings = localStorage.getItem('smsGatewaySettings');
+    if (savedSettings) {
+      const settings = JSON.parse(savedSettings);
+      setGatewayUrl(settings.url || 'http://192.168.1.100:8080');
+      setGatewayUsername(settings.username || '');
+      setGatewayPassword(settings.password || '');
+      setSendDelay(settings.delay || 30);
+    }
+  }, []);
+
+  // Save gateway settings to localStorage
+  const saveGatewaySettings = () => {
+    localStorage.setItem('smsGatewaySettings', JSON.stringify({
+      url: gatewayUrl,
+      username: gatewayUsername,
+      password: gatewayPassword,
+      delay: sendDelay
+    }));
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 2000);
+  };
   const [isSending, setIsSending] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -335,7 +360,7 @@ export default function SMSCampaignView() {
 
                 <input className="sms-input" value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="Gateway URL (e.g., http://192.168.1.100:8080)" />
                 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                   <input 
                     className="sms-input" 
                     value={gatewayUsername} 
@@ -352,6 +377,25 @@ export default function SMSCampaignView() {
                     style={{ marginBottom: 0 }}
                   />
                 </div>
+                
+                <button 
+                  onClick={saveGatewaySettings}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    marginBottom: 12,
+                    border: 'none',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: settingsSaved ? '#10b981' : '#e5e7eb',
+                    color: settingsSaved ? 'white' : '#374151',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {settingsSaved ? '✓ Settings Saved!' : '💾 Save Gateway Settings'}
+                </button>
                 
                 <div style={{ marginBottom: 16 }}>
                   <label style={{ fontSize: 12, color: '#6b7280' }}>Delay: {sendDelay}s</label>
