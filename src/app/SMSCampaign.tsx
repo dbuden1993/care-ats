@@ -35,6 +35,8 @@ export default function SMSCampaignView() {
   const [filterCalled, setFilterCalled] = useState('all');
   const [excludeOptOut, setExcludeOptOut] = useState(true);
   const [gatewayUrl, setGatewayUrl] = useState('http://192.168.1.100:8080');
+  const [gatewayUsername, setGatewayUsername] = useState('');
+  const [gatewayPassword, setGatewayPassword] = useState('');
   const [sendDelay, setSendDelay] = useState(30);
   const [isSending, setIsSending] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -110,10 +112,18 @@ export default function SMSCampaignView() {
 
   async function sendViaGateway(phone: string, text: string): Promise<boolean> {
     try {
-      const response = await fetch(`${gatewayUrl}/send`, {
+      // SMS Gateway by capcom6 uses /message endpoint with Basic Auth
+      const credentials = btoa(`${gatewayUsername}:${gatewayPassword}`);
+      const response = await fetch(`${gatewayUrl}/message`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, message: text })
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${credentials}`
+        },
+        body: JSON.stringify({ 
+          message: text, 
+          phoneNumbers: [phone] 
+        })
       });
       return response.ok;
     } catch { return false; }
@@ -323,7 +333,25 @@ export default function SMSCampaignView() {
                   <div className="sms-stat"><strong>{hours}h {minutes}m</strong><small>Est. time</small></div>
                 </div>
 
-                <input className="sms-input" value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="Gateway URL" />
+                <input className="sms-input" value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="Gateway URL (e.g., http://192.168.1.100:8080)" />
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                  <input 
+                    className="sms-input" 
+                    value={gatewayUsername} 
+                    onChange={e => setGatewayUsername(e.target.value)} 
+                    placeholder="Gateway Username" 
+                    style={{ marginBottom: 0 }}
+                  />
+                  <input 
+                    className="sms-input" 
+                    type="password"
+                    value={gatewayPassword} 
+                    onChange={e => setGatewayPassword(e.target.value)} 
+                    placeholder="Gateway Password" 
+                    style={{ marginBottom: 0 }}
+                  />
+                </div>
                 
                 <div style={{ marginBottom: 16 }}>
                   <label style={{ fontSize: 12, color: '#6b7280' }}>Delay: {sendDelay}s</label>
