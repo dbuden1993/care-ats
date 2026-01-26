@@ -142,7 +142,7 @@ export default function WhatsAppIntelligence() {
     ];
     
     let currentConvo: { name: string; messages: WhatsAppMessage[] } | null = null;
-    let myNames = new Set(['You', 'Me', '~You', '~Me']); // Names that indicate sender is "me"
+    const myNames = new Set(['You', 'Me', '~You', '~Me']); // Names that indicate sender is "me"
     
     for (const line of lines) {
       if (!line.trim()) continue;
@@ -155,7 +155,8 @@ export default function WhatsAppIntelligence() {
           const [, dateStr, timeStr, sender, text] = match;
           
           // Determine if sender is me or them
-          const isMe = myNames.has(sender.trim()) || sender.includes('~') && !sender.includes(':');
+          const senderTrimmed = sender.trim();
+          const isMe = myNames.has(senderTrimmed) || (sender.includes('~') && !sender.includes(':'));
           
           // Parse date
           let timestamp: Date;
@@ -169,9 +170,15 @@ export default function WhatsAppIntelligence() {
             timestamp = new Date();
           }
           
-          const contactName = isMe ? (currentConvo?.name || 'Unknown') : sender.trim();
+          // Determine contact name - if it's me, use existing convo name, otherwise use sender
+          let contactName: string;
+          if (isMe) {
+            contactName = currentConvo?.name || 'Unknown';
+          } else {
+            contactName = senderTrimmed;
+          }
           
-          if (!currentConvo || currentConvo.name !== contactName && !isMe) {
+          if (!currentConvo || (currentConvo.name !== contactName && !isMe)) {
             currentConvo = { name: contactName, messages: [] };
           }
           
