@@ -18,6 +18,7 @@ import ComplianceView from './ComplianceView';
 import DashboardView from './DashboardView';
 import WhatsAppCampaign from './WhatsAppCampaign';
 import SMSCampaign from './SMSCampaign';
+import WhatsAppIntelligence from './WhatsAppIntelligence';
 import SearchBar from './SearchBar';
 import CandidateModal from './CandidateModal';
 import JobModal from './JobModal';
@@ -46,7 +47,7 @@ import type { Job, Pipeline, ViewMode, SidebarSection } from './types';
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
-type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms' | 'candidate-dashboard';
+type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms' | 'candidate-dashboard' | 'whatsapp-intelligence';
 
 function Dashboard() {
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -257,7 +258,8 @@ function Dashboard() {
     ] },
     { section: 'OUTREACH', items: [
       { id: 'sms', icon: '📱', label: 'SMS Campaign', badge: importedCount > 0 ? '!' : undefined },
-      { id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' }
+      { id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' },
+      { id: 'whatsapp-intelligence', icon: '🧠', label: 'AI Intelligence' }
     ] },
     { section: 'TALENT', items: [
       { id: 'talent-pools', icon: '🎯', label: 'Talent Pools' }, 
@@ -295,6 +297,7 @@ function Dashboard() {
         .nav-item.whatsapp.active{background:linear-gradient(135deg,#ecfdf5,#d1fae5);color:#059669}
         .nav-item.sms.active{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#d97706}
         .nav-item.call-history.active{background:linear-gradient(135deg,#fce7f3,#fbcfe8);color:#db2777}
+        .nav-item.whatsapp-intelligence.active{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#92400e}
         .nav-icon{width:20px;text-align:center;font-size:15px}
         .nav-badge{background:#e5e7eb;color:#374151;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:auto}
         .nav-badge.alert{background:#fef3c7;color:#d97706;animation:pulse 2s infinite}
@@ -347,7 +350,7 @@ function Dashboard() {
             {group.items.map(item => (
               <Tooltip key={item.id} content={sidebarCollapsed ? item.label : ''} position="right">
                 <div 
-                  className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${item.id === 'sms' ? 'sms' : ''} ${item.id === 'call-history' ? 'call-history' : ''} ${section === item.id ? 'active' : ''}`} 
+                  className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${item.id === 'sms' ? 'sms' : ''} ${item.id === 'call-history' ? 'call-history' : ''} ${item.id === 'whatsapp-intelligence' ? 'whatsapp-intelligence' : ''} ${section === item.id ? 'active' : ''}`} 
                   onClick={() => setSection(item.id as ExtendedSection)}
                 >
                   <span className="nav-icon">{item.icon}</span>
@@ -389,6 +392,10 @@ function Dashboard() {
         
         {section === 'whatsapp' && (
           <WhatsAppCampaign candidates={candidates} />
+        )}
+
+        {section === 'whatsapp-intelligence' && (
+          <WhatsAppIntelligence />
         )}
 
         {section === 'sms' && (
