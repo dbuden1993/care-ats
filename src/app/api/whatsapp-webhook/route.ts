@@ -11,6 +11,18 @@ const anthropic = new Anthropic({
   apiKey: process.env.CLAUDE_API_KEY || '',
 });
 
+// CORS headers
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+// Handle OPTIONS preflight request
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders });
+}
+
 interface WhatsAppMessage {
   id: string;
   chatName: string;
@@ -216,7 +228,7 @@ export async function POST(request: NextRequest) {
     const payload: WebhookPayload = await request.json();
     
     if (!payload.messages || payload.messages.length === 0) {
-      return NextResponse.json({ success: true, processed: 0 });
+      return NextResponse.json({ success: true, processed: 0 }, { headers: corsHeaders });
     }
 
     console.log(`[WhatsApp Webhook] Received ${payload.messages.length} messages`);
@@ -277,13 +289,13 @@ export async function POST(request: NextRequest) {
       success: true,
       processed: results.length,
       results
-    });
+    }, { headers: corsHeaders });
 
   } catch (error: any) {
     console.error('[WhatsApp Webhook] Error:', error);
     return NextResponse.json(
       { success: false, error: error.message },
-      { status: 500 }
+      { status: 500, headers: corsHeaders }
     );
   }
 }
@@ -294,5 +306,5 @@ export async function GET() {
     status: 'ok',
     service: 'CareRecruit WhatsApp Webhook',
     timestamp: new Date().toISOString()
-  });
+  }, { headers: corsHeaders });
 }
