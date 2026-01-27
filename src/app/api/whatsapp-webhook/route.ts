@@ -103,11 +103,12 @@ async function findOrCreateCandidate(chatName: string, phone: string | null) {
   return null;
 }
 
-// Store message in database
+// Store message in database (with duplicate prevention)
 async function storeMessage(message: WhatsAppMessage, candidateId: string | null) {
+  // Use upsert to prevent duplicates - if message_id exists, do nothing
   const { data, error } = await supabase
     .from('whatsapp_messages')
-    .insert({
+    .upsert({
       candidate_id: candidateId,
       chat_name: message.chatName,
       phone_e164: normalizePhone(message.phone),
@@ -116,11 +117,14 @@ async function storeMessage(message: WhatsAppMessage, candidateId: string | null
       message_id: message.id,
       message_timestamp: message.timestamp,
       captured_at: message.capturedAt
+    }, {
+      onConflict: 'message_id',
+      ignoreDuplicates: true
     })
     .select()
     .single();
   
-  if (error) {
+  if (error && !error.message.includes('duplicate')) {
     console.error('Error storing message:', error);
     return null;
   }
