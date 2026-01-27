@@ -311,9 +311,14 @@ export default function SMSCampaignView() {
   // Parse roles from string (could be comma-separated, JSON array, or plain text)
   const parseRoles = (rolesStr: string | null | undefined): string[] => {
     if (!rolesStr) return [];
+    if (typeof rolesStr !== 'string') return [];
     try {
       const parsed = JSON.parse(rolesStr);
-      if (Array.isArray(parsed)) return parsed.map(r => r.toLowerCase().trim());
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(r => r && typeof r === 'string')
+          .map(r => r.toLowerCase().trim());
+      }
     } catch {}
     return rolesStr.toLowerCase().split(/[,;|]/).map(r => r.trim()).filter(Boolean);
   };
@@ -325,14 +330,21 @@ export default function SMSCampaignView() {
     const role = CARE_ROLES.find(r => r.key === roleKey);
     if (!role) return true;
     
-    // Special cases
-    if (roleKey === 'driver') return candidate.driver?.toLowerCase() === 'yes';
-    if (roleKey === 'dbs') return candidate.dbs_update_service?.toLowerCase() === 'yes';
+    // Special cases - ensure values are strings before calling toLowerCase
+    if (roleKey === 'driver') {
+      const driver = candidate.driver;
+      return typeof driver === 'string' && driver.toLowerCase() === 'yes';
+    }
+    if (roleKey === 'dbs') {
+      const dbs = candidate.dbs_update_service;
+      return typeof dbs === 'string' && dbs.toLowerCase() === 'yes';
+    }
     
     const candidateRoles = parseRoles(candidate.roles);
+    const rolesStr = candidate.roles;
     return role.keywords.some(kw => 
       candidateRoles.some(cr => cr.includes(kw)) || 
-      candidate.roles?.toLowerCase().includes(kw)
+      (typeof rolesStr === 'string' && rolesStr.toLowerCase().includes(kw))
     );
   };
 
@@ -364,9 +376,9 @@ export default function SMSCampaignView() {
       if (calledFilter === 'not-called' && c.last_called_at) return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
-        const nameMatch = c.name?.toLowerCase().includes(q);
+        const nameMatch = typeof c.name === 'string' && c.name.toLowerCase().includes(q);
         const phoneMatch = c.phone_e164.includes(q);
-        const roleMatch = c.roles?.toLowerCase().includes(q);
+        const roleMatch = typeof c.roles === 'string' && c.roles.toLowerCase().includes(q);
         if (!nameMatch && !phoneMatch && !roleMatch) return false;
       }
       return true;
@@ -609,7 +621,9 @@ export default function SMSCampaignView() {
     return conversations.filter(c => {
       if (convoSearch) {
         const q = convoSearch.toLowerCase();
-        if (!c.name?.toLowerCase().includes(q) && !c.phone.includes(q)) return false;
+        const nameMatch = typeof c.name === 'string' && c.name.toLowerCase().includes(q);
+        const phoneMatch = typeof c.phone === 'string' && c.phone.includes(q);
+        if (!nameMatch && !phoneMatch) return false;
       }
       if (convoFilter === 'needs_action') return c.hasResponse && ['interested', 'callback_request', 'question'].includes(c.latestIntent || '') && !c.isHandled;
       if (convoFilter === 'interested') return c.latestIntent === 'interested';
