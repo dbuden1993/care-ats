@@ -152,22 +152,34 @@ export default function SMSCampaignView() {
 
   // Load on mount
   useEffect(() => {
-    const saved = localStorage.getItem('smsGatewaySettings');
-    if (saved) {
-      try {
+    if (typeof window === 'undefined') return;
+    
+    try {
+      const saved = localStorage.getItem('smsGatewaySettings');
+      if (saved) {
         const s = JSON.parse(saved);
         setGatewayUrl(s.url || 'http://192.168.1.100:8080');
         setGatewayUsername(s.username || '');
         setGatewayPassword(s.password || '');
         setSendDelay(s.delay || 30);
-      } catch {}
+      }
+    } catch (e) {
+      console.error('Error loading gateway settings:', e);
     }
     
-    const savedHandled = localStorage.getItem('handledConversations');
-    if (savedHandled) try { setHandledConvos(new Set(JSON.parse(savedHandled))); } catch {}
+    try {
+      const savedHandled = localStorage.getItem('handledConversations');
+      if (savedHandled) setHandledConvos(new Set(JSON.parse(savedHandled)));
+    } catch (e) {
+      console.error('Error loading handled conversations:', e);
+    }
     
-    const savedAuds = localStorage.getItem('smsAudiences');
-    if (savedAuds) try { setSavedAudiences(JSON.parse(savedAuds)); } catch {}
+    try {
+      const savedAuds = localStorage.getItem('smsAudiences');
+      if (savedAuds) setSavedAudiences(JSON.parse(savedAuds));
+    } catch (e) {
+      console.error('Error loading audiences:', e);
+    }
     
     loadCandidates();
     loadConversations();
@@ -176,8 +188,26 @@ export default function SMSCampaignView() {
   }, []);
 
   useEffect(() => { loadSentPhones(); }, [recentDays]);
-  useEffect(() => { localStorage.setItem('handledConversations', JSON.stringify([...handledConvos])); }, [handledConvos]);
-  useEffect(() => { localStorage.setItem('smsAudiences', JSON.stringify(savedAudiences)); }, [savedAudiences]);
+  
+  useEffect(() => { 
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('handledConversations', JSON.stringify([...handledConvos])); 
+      } catch (e) {
+        console.error('Error saving handled conversations:', e);
+      }
+    }
+  }, [handledConvos]);
+  
+  useEffect(() => { 
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('smsAudiences', JSON.stringify(savedAudiences)); 
+      } catch (e) {
+        console.error('Error saving audiences:', e);
+      }
+    }
+  }, [savedAudiences]);
 
   const saveGatewaySettings = () => {
     localStorage.setItem('smsGatewaySettings', JSON.stringify({ url: gatewayUrl, username: gatewayUsername, password: gatewayPassword, delay: sendDelay }));
@@ -187,25 +217,45 @@ export default function SMSCampaignView() {
 
   async function loadCandidates() {
     setLoading(true);
-    const { data } = await supabase
-      .from('candidates')
-      .select('id, name, phone_e164, status, source, last_called_at, sms_opt_out, roles, driver, dbs_update_service, created_at')
-      .not('phone_e164', 'is', null)
-      .order('created_at', { ascending: false });
-    if (data) setCandidates(data);
+    try {
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('id, name, phone_e164, status, source, last_called_at, sms_opt_out, roles, driver, dbs_update_service, created_at')
+        .not('phone_e164', 'is', null)
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.error('Error loading candidates:', error);
+      }
+      if (data) setCandidates(data);
+    } catch (e) {
+      console.error('Error loading candidates:', e);
+    }
     setLoading(false);
   }
 
   async function loadSentPhones() {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - recentDays);
-    const { data } = await supabase.from('sms_messages').select('phone_e164').eq('direction', 'outbound').gte('created_at', cutoff.toISOString());
-    if (data) setSentPhones(new Set(data.map(m => m.phone_e164)));
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - recentDays);
+      const { data, error } = await supabase.from('sms_messages').select('phone_e164').eq('direction', 'outbound').gte('created_at', cutoff.toISOString());
+      if (error) {
+        console.error('Error loading sent phones:', error);
+        return;
+      }
+      if (data) setSentPhones(new Set(data.map(m => m.phone_e164)));
+    } catch (e) {
+      console.error('Error loading sent phones:', e);
+    }
   }
 
   async function loadConversations() {
-    const { data } = await supabase.from('sms_messages').select('*, candidates(id, name, roles, status)').order('created_at', { ascending: false }).limit(500);
-    if (data) {
+    try {
+      const { data, error } = await supabase.from('sms_messages').select('*, candidates(id, name, roles, status)').order('created_at', { ascending: false }).limit(500);
+      if (error) {
+        console.error('Error loading conversations:', error);
+        return;
+      }
+      if (data && data.length > 0) {
       const grouped = new Map<string, any[]>();
       data.forEach(msg => {
         const existing = grouped.get(msg.phone_e164) || [];
@@ -239,12 +289,23 @@ export default function SMSCampaignView() {
       });
       convos.sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime());
       setConversations(convos);
+      }
+    } catch (e) {
+      console.error('Error loading conversations:', e);
     }
   }
 
   async function loadCampaigns() {
-    const { data } = await supabase.from('sms_campaigns').select('*').order('created_at', { ascending: false }).limit(50);
-    if (data) setCampaigns(data);
+    try {
+      const { data, error } = await supabase.from('sms_campaigns').select('*').order('created_at', { ascending: false }).limit(50);
+      if (error) {
+        console.error('Error loading campaigns:', error);
+        return;
+      }
+      if (data) setCampaigns(data);
+    } catch (e) {
+      console.error('Error loading campaigns:', e);
+    }
   }
 
   // Parse roles from string (could be comma-separated, JSON array, or plain text)
@@ -276,19 +337,24 @@ export default function SMSCampaignView() {
   };
 
   // Phone validation
-  const isValidPhone = (phone: string): boolean => {
-    if (!phone) return false;
-    const cleaned = phone.replace(/[\s\-\(\)\.]/g, '');
-    let e164 = cleaned;
-    if (cleaned.startsWith('0')) e164 = '+44' + cleaned.slice(1);
-    else if (!cleaned.startsWith('+')) e164 = '+' + cleaned;
-    return e164.startsWith('+447') && e164.length === 13;
+  const isValidPhone = (phone: string | null | undefined): boolean => {
+    if (!phone || typeof phone !== 'string') return false;
+    try {
+      const cleaned = phone.replace(/[\s\-\(\)\.]/g, '');
+      let e164 = cleaned;
+      if (cleaned.startsWith('0')) e164 = '+44' + cleaned.slice(1);
+      else if (!cleaned.startsWith('+')) e164 = '+' + cleaned;
+      return e164.startsWith('+447') && e164.length === 13;
+    } catch {
+      return false;
+    }
   };
 
   // Filtered candidates (for display)
   const filteredCandidates = useMemo(() => {
+    if (!candidates || candidates.length === 0) return [];
     return candidates.filter(c => {
-      if (!c.phone_e164 || !isValidPhone(c.phone_e164)) return false;
+      if (!c || !c.phone_e164 || !isValidPhone(c.phone_e164)) return false;
       if (excludeOptOut && c.sms_opt_out) return false;
       if (excludeRecentlySent && sentPhones.has(c.phone_e164)) return false;
       if (!matchesRole(c, roleFilter)) return false;
@@ -309,26 +375,35 @@ export default function SMSCampaignView() {
 
   // Selected candidates (for sending)
   const selectedCandidates = useMemo(() => {
-    return candidates.filter(c => selectedIds.has(c.id) && isValidPhone(c.phone_e164));
+    if (!candidates || candidates.length === 0) return [];
+    return candidates.filter(c => c && c.phone_e164 && selectedIds.has(c.id) && isValidPhone(c.phone_e164));
   }, [candidates, selectedIds]);
 
   // Get unique values for filters
-  const uniqueSources = useMemo(() => [...new Set(candidates.map(c => c.source).filter(Boolean))], [candidates]);
-  const uniqueStatuses = useMemo(() => [...new Set(candidates.map(c => c.status).filter(Boolean))], [candidates]);
+  const uniqueSources = useMemo(() => {
+    if (!candidates || candidates.length === 0) return [];
+    return [...new Set(candidates.map(c => c.source).filter(Boolean))];
+  }, [candidates]);
+  
+  const uniqueStatuses = useMemo(() => {
+    if (!candidates || candidates.length === 0) return [];
+    return [...new Set(candidates.map(c => c.status).filter(Boolean))];
+  }, [candidates]);
 
   // Role counts
   const roleCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: filteredCandidates.length };
+    const counts: Record<string, number> = { all: filteredCandidates?.length || 0 };
+    if (!candidates || candidates.length === 0) return counts;
     CARE_ROLES.forEach(role => {
       counts[role.key] = candidates.filter(c => 
-        isValidPhone(c.phone_e164) && 
+        c && c.phone_e164 && isValidPhone(c.phone_e164) && 
         (!excludeOptOut || !c.sms_opt_out) && 
         (!excludeRecentlySent || !sentPhones.has(c.phone_e164)) &&
         matchesRole(c, role.key)
       ).length;
     });
     return counts;
-  }, [candidates, excludeOptOut, excludeRecentlySent, sentPhones]);
+  }, [candidates, filteredCandidates?.length, excludeOptOut, excludeRecentlySent, sentPhones]);
 
   // Selection handlers
   const toggleSelect = (id: string) => {
@@ -350,7 +425,7 @@ export default function SMSCampaignView() {
 
   const selectByRole = (roleKey: string) => {
     const matching = candidates.filter(c => 
-      isValidPhone(c.phone_e164) && 
+      c && c.phone_e164 && isValidPhone(c.phone_e164) && 
       (!excludeOptOut || !c.sms_opt_out) && 
       matchesRole(c, roleKey)
     );
@@ -530,6 +605,7 @@ export default function SMSCampaignView() {
 
   // Filtered conversations
   const filteredConversations = useMemo(() => {
+    if (!conversations || conversations.length === 0) return [];
     return conversations.filter(c => {
       if (convoSearch) {
         const q = convoSearch.toLowerCase();
@@ -543,9 +619,9 @@ export default function SMSCampaignView() {
   }, [conversations, convoSearch, convoFilter]);
 
   const convoStats = useMemo(() => ({
-    total: conversations.length,
-    needsAction: conversations.filter(c => c.hasResponse && ['interested', 'callback_request', 'question'].includes(c.latestIntent || '') && !c.isHandled).length,
-    interested: conversations.filter(c => c.latestIntent === 'interested').length
+    total: conversations?.length || 0,
+    needsAction: (conversations || []).filter(c => c.hasResponse && ['interested', 'callback_request', 'question'].includes(c.latestIntent || '') && !c.isHandled).length,
+    interested: (conversations || []).filter(c => c.latestIntent === 'interested').length
   }), [conversations]);
 
   const getIntentConfig = (intent: string | null) => {
