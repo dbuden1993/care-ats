@@ -102,7 +102,7 @@ async function storeMessage(message: WhatsAppMessage, candidateId: string | null
       direction: message.direction,
       message_text: message.text,
       message_id: message.id,
-      timestamp: message.timestamp,
+      message_timestamp: message.timestamp,
       captured_at: message.capturedAt
     })
     .select()
