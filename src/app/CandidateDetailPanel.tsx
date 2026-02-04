@@ -51,7 +51,7 @@ interface CallRecord {
   created_at: string;
 }
 
-type Tab = 'overview' | 'calls' | 'notes' | 'activity';
+type Tab = 'overview' | 'calls' | 'messages' | 'notes' | 'activity';
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -75,6 +75,10 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
   const [loadingNotes, setLoadingNotes] = useState(true);
   const [newNote, setNewNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+
+  // WhatsApp Messages
+  const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(true);
 
   // Activity
   const [activities, setActivities] = useState<any[]>([]);
@@ -184,6 +188,52 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
     };
     fetchNotes();
   }, [candidate.id]);
+
+  // Fetch WhatsApp messages
+  useEffect(() => {
+    const fetchWhatsAppMessages = async () => {
+      setLoadingMessages(true);
+      try {
+        const phone = candidate.phone_e164;
+        if (phone) {
+          // Try both by candidate_id and by phone
+          const { data: byId } = await supabase
+            .from('whatsapp_messages')
+            .select('*')
+            .eq('candidate_id', candidate.id)
+            .order('message_timestamp', { ascending: false });
+          
+          const { data: byPhone } = await supabase
+            .from('whatsapp_messages')
+            .select('*')
+            .eq('phone_e164', phone)
+            .order('message_timestamp', { ascending: false });
+          
+          // Combine and dedupe
+          const all = [...(byId || []), ...(byPhone || [])];
+          const seen = new Set<string>();
+          const unique = all.filter(m => {
+            if (seen.has(m.id)) return false;
+            seen.add(m.id);
+            return true;
+          });
+          
+          // Sort by timestamp
+          unique.sort((a, b) => {
+            const dateA = new Date(a.message_timestamp || a.created_at).getTime();
+            const dateB = new Date(b.message_timestamp || b.created_at).getTime();
+            return dateB - dateA;
+          });
+          
+          setWhatsappMessages(unique);
+        }
+      } catch (err) {
+        console.error('Error fetching WhatsApp messages:', err);
+      }
+      setLoadingMessages(false);
+    };
+    fetchWhatsAppMessages();
+  }, [candidate.id, candidate.phone_e164]);
 
   // Fetch activity
   useEffect(() => {
@@ -324,6 +374,7 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
   const tabs: { id: Tab; label: string; icon: string; badge?: number }[] = [
     { id: 'overview', label: 'Overview', icon: '👤' },
     { id: 'calls', label: 'Calls', icon: '📞', badge: totalCalls },
+    { id: 'messages', label: 'WhatsApp', icon: '💬', badge: whatsappMessages.length },
     { id: 'notes', label: 'Notes', icon: '📝', badge: notes.length },
     { id: 'activity', label: 'Activity', icon: '📊' },
   ];
@@ -539,6 +590,103 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
               <div style={{ margin: '16px 16px 0' }}>
                 <CandidateAIInsights candidateId={candidate.id} candidateName={candidate.name} />
               </div>
+
+              {/* Recent Communications Summary */}
+              {(callRecords.length > 0 || whatsappMessages.length > 0) && (
+                <div className="cdp-section" style={{ margin: '16px 16px 0' }}>
+                  <div className="cdp-section-head">
+                    <span className="cdp-section-title">📱 Recent Communications</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {/* Last Call */}
+                    {callRecords.length > 0 && (
+                      <div 
+                        onClick={() => setActiveTab('calls')}
+                        style={{ 
+                          flex: 1, 
+                          minWidth: 200,
+                          padding: 12, 
+                          background: '#fef3c7', 
+                          borderRadius: 8, 
+                          cursor: 'pointer',
+                          border: '1px solid #fcd34d',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                          <span>📞</span>
+                          <span style={{ fontWeight: 600, color: '#92400e' }}>Last Call</span>
+                          {callRecords[0].energy_score && (
+                            <span style={{ 
+                              marginLeft: 'auto', 
+                              background: callRecords[0].energy_score >= 7 ? '#dcfce7' : callRecords[0].energy_score >= 4 ? '#fef9c3' : '#fee2e2',
+                              color: callRecords[0].energy_score >= 7 ? '#166534' : callRecords[0].energy_score >= 4 ? '#854d0e' : '#991b1b',
+                              padding: '2px 8px',
+                              borderRadius: 12,
+                              fontSize: 12,
+                              fontWeight: 600
+                            }}>
+                              ⚡ {callRecords[0].energy_score}/10
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 13, color: '#78716c' }}>
+                          {new Date(callRecords[0].call_time || callRecords[0].created_at).toLocaleDateString('en-GB', {
+                            day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+                          })}
+                          {callRecords[0].duration_ms && ` • ${Math.round(callRecords[0].duration_ms / 60000)} min`}
+                        </div>
+                        {callRecords[0].call_summary && (
+                          <div style={{ fontSize: 12, color: '#57534e', marginTop: 6, lineHeight: 1.4 }}>
+                            {callRecords[0].call_summary.substring(0, 100)}...
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* Last WhatsApp */}
+                    {whatsappMessages.length > 0 && (
+                      <div 
+                        onClick={() => setActiveTab('messages')}
+                        style={{ 
+                          flex: 1, 
+                          minWidth: 200,
+                          padding: 12, 
+                          background: '#dcfce7', 
+                          borderRadius: 8, 
+                          cursor: 'pointer',
+                          border: '1px solid #86efac',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                          <span>💬</span>
+                          <span style={{ fontWeight: 600, color: '#166534' }}>Last WhatsApp</span>
+                          <span style={{ 
+                            marginLeft: 'auto', 
+                            background: '#bbf7d0',
+                            color: '#166534',
+                            padding: '2px 8px',
+                            borderRadius: 12,
+                            fontSize: 12
+                          }}>
+                            {whatsappMessages.length} msgs
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 13, color: '#4ade80' }}>
+                          {new Date(whatsappMessages[0].message_timestamp || whatsappMessages[0].created_at).toLocaleDateString('en-GB', {
+                            day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+                          })}
+                          {whatsappMessages[0].direction === 'outbound' ? ' • Sent' : ' • Received'}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#15803d', marginTop: 6, lineHeight: 1.4 }}>
+                          {whatsappMessages[0].message_text?.substring(0, 80)}...
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* AI Summary */}
               {candidate.experience_summary && (
@@ -823,6 +971,101 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
                     </div>
                   );
                 })
+              )}
+            </>
+          )}
+          
+          {/* ============ MESSAGES TAB ============ */}
+          {activeTab === 'messages' && (
+            <>
+              {loadingMessages ? (
+                <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>
+                  Loading messages...
+                </div>
+              ) : whatsappMessages.length === 0 ? (
+                <div style={{ padding: 40, textAlign: 'center' }}>
+                  <div style={{ fontSize: 48, marginBottom: 16 }}>💬</div>
+                  <div style={{ color: '#6b7280', marginBottom: 8 }}>No WhatsApp messages</div>
+                  <div style={{ color: '#9ca3af', fontSize: 13 }}>
+                    Messages will appear here when captured from WhatsApp Web
+                  </div>
+                </div>
+              ) : (
+                <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {/* Group messages by date */}
+                  {(() => {
+                    const grouped: { [date: string]: any[] } = {};
+                    whatsappMessages.forEach(msg => {
+                      const date = new Date(msg.message_timestamp || msg.created_at).toLocaleDateString('en-GB', {
+                        day: 'numeric', month: 'short', year: 'numeric'
+                      });
+                      if (!grouped[date]) grouped[date] = [];
+                      grouped[date].push(msg);
+                    });
+                    
+                    return Object.entries(grouped).map(([date, msgs]) => (
+                      <div key={date}>
+                        <div style={{ 
+                          textAlign: 'center', 
+                          color: '#9ca3af', 
+                          fontSize: 12, 
+                          margin: '16px 0 8px',
+                          position: 'sticky',
+                          top: 0,
+                          background: '#fff',
+                          padding: '4px 0'
+                        }}>
+                          {date}
+                        </div>
+                        {msgs.map(msg => (
+                          <div 
+                            key={msg.id}
+                            style={{
+                              display: 'flex',
+                              justifyContent: msg.direction === 'outbound' ? 'flex-end' : 'flex-start',
+                              marginBottom: 4
+                            }}
+                          >
+                            <div style={{
+                              maxWidth: '75%',
+                              padding: '8px 12px',
+                              borderRadius: 12,
+                              background: msg.direction === 'outbound' ? '#dcfce7' : '#f3f4f6',
+                              borderTopLeftRadius: msg.direction === 'inbound' ? 4 : 12,
+                              borderTopRightRadius: msg.direction === 'outbound' ? 4 : 12,
+                            }}>
+                              <div style={{ fontSize: 14, color: '#1f2937', whiteSpace: 'pre-wrap' }}>
+                                {msg.message_text}
+                              </div>
+                              <div style={{ 
+                                fontSize: 11, 
+                                color: '#9ca3af', 
+                                marginTop: 4,
+                                textAlign: msg.direction === 'outbound' ? 'right' : 'left'
+                              }}>
+                                {new Date(msg.message_timestamp || msg.created_at).toLocaleTimeString('en-GB', {
+                                  hour: '2-digit', minute: '2-digit'
+                                })}
+                                {msg.ai_intent && (
+                                  <span style={{ 
+                                    marginLeft: 8, 
+                                    background: '#e0e7ff', 
+                                    padding: '1px 6px', 
+                                    borderRadius: 8,
+                                    color: '#4f46e5',
+                                    fontSize: 10
+                                  }}>
+                                    {msg.ai_intent}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ));
+                  })()}
+                </div>
               )}
             </>
           )}
