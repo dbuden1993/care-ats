@@ -106,52 +106,67 @@ async function handleCallWithRecording(data: any) {
     );
   }
 
-  // Trigger Edge Function (fire and forget)
-  triggerEdgeFunction(callId);
+  // Trigger Edge Function and WAIT for it to start
+  // Must await - otherwise Vercel kills the serverless function before the request reaches Supabase
+  const edgeResult = await triggerEdgeFunction(callId);
 
   return NextResponse.json({
     status: 'ok',
     message: 'Call queued for processing',
     call_id: callId,
+    edge_function: edgeResult,
   });
 }
 
-function triggerEdgeFunction(callId: string) {
+async function triggerEdgeFunction(callId: string): Promise<{ triggered: boolean; status?: number; error?: string }> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !anonKey) {
     console.error('[Dialpad] Cannot trigger Edge Function - missing SUPABASE_URL or ANON_KEY');
-    return;
+    return { triggered: false, error: 'Missing env vars' };
   }
 
   const url = `${supabaseUrl}/functions/v1/process-call`;
   console.log(`[Dialpad] Triggering Edge Function for call ${callId}: ${url}`);
 
-  // FIX: was previously a tagged template literal — fetch`...` — which silently failed.
-  // Must be fetch(...) with parentheses.
-  fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${anonKey}`,
-    },
-    body: JSON.stringify({ call_id: callId }),
-  })
-    .then(async (res) => {
-      const text = await res.text().catch(() => '');
-      console.log(`[Dialpad] Edge Function response (${res.status}):`, text.substring(0, 200));
-    })
-    .catch((e) => {
-      console.error('[Dialpad] Edge Function trigger failed:', e?.message || e);
+  try {
+    // Use AbortController with 8s timeout (Vercel free tier has 10s limit)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({ call_id: callId }),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeout);
+
+    const text = await res.text().catch(() => '');
+    console.log(`[Dialpad] Edge Function response (${res.status}):`, text.substring(0, 300));
+
+    if (!res.ok) {
+      return { triggered: false, status: res.status, error: text.substring(0, 200) };
+    }
+
+    return { triggered: true, status: res.status };
+  } catch (e: any) {
+    const errMsg = e?.name === 'AbortError' ? 'Timeout (8s)' : (e?.message || 'Unknown error');
+    console.error(`[Dialpad] Edge Function trigger failed:`, errMsg);
+    return { triggered: false, error: errMsg };
+  }
 }
 
 export async function GET() {
   return NextResponse.json({
     status: 'ok',
     message: 'Dialpad webhook - stores calls, processes via Supabase Edge Function',
-    version: '2.1.0',
+    version: '2.2.0',
     timestamp: new Date().toISOString(),
   });
 }
