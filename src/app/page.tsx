@@ -118,32 +118,34 @@ function Dashboard() {
     } catch (e) { setJobs([]); }
   }, []);
 
+  // FIX: use { count: 'exact', head: true } and nullish coalescing
   const fetchImportedCount = useCallback(async () => {
     try {
-      const { data, count, error } = await supabase
+      const { count } = await supabase
         .from('candidates')
-        .select('id', { count: 'exact' })
+        .select('*', { count: 'exact', head: true })
         .is('last_called_at', null);
-      
-      setImportedCount(count || data?.length || 0);
+      setImportedCount(count ?? 0);
     } catch (e) { console.error('Failed to count imported:', e); }
   }, []);
 
+  // FIX: use { count: 'exact', head: true } and nullish coalescing
   const fetchCallHistoryCount = useCallback(async () => {
     try {
       const { count } = await supabase
         .from('call_history')
-        .select('id', { count: 'exact' });
-      setCallHistoryCount(count || 0);
+        .select('*', { count: 'exact', head: true });
+      setCallHistoryCount(count ?? 0);
     } catch (e) { console.error('Failed to count call history:', e); }
   }, []);
 
+  // FIX: use { count: 'exact', head: true } and nullish coalescing
   const fetchTotalCandidates = useCallback(async () => {
     try {
       const { count } = await supabase
         .from('candidates')
-        .select('id', { count: 'exact' });
-      setTotalCandidates(count || 0);
+        .select('*', { count: 'exact', head: true });
+      setTotalCandidates(count ?? 0);
     } catch (e) { console.error('Failed to count total candidates:', e); }
   }, []);
 
@@ -250,10 +252,10 @@ function Dashboard() {
   const navItems = [
     { section: 'RECRUITMENT', items: [
       { id: 'dashboard', icon: '📊', label: 'Dashboard' }, 
-      { id: 'candidate-dashboard', icon: '👥', label: 'Candidates', badge: callHistoryCount },
-      { id: 'candidates', icon: '📋', label: 'Pipeline', badge: stats.total },
-      { id: 'imported', icon: '📥', label: 'Imported Pool', badge: importedCount }, 
-      { id: 'jobs', icon: '💼', label: 'Jobs', badge: jobs.filter(j => j.status === 'open').length }, 
+      { id: 'candidate-dashboard', icon: '👥', label: 'Candidates', badge: callHistoryCount || undefined },
+      { id: 'candidates', icon: '📋', label: 'Pipeline', badge: stats.total || undefined },
+      { id: 'imported', icon: '📥', label: 'Imported Pool', badge: importedCount || undefined }, 
+      { id: 'jobs', icon: '💼', label: 'Jobs', badge: jobs.filter(j => j.status === 'open').length || undefined }, 
       { id: 'interviews', icon: '📅', label: 'Interviews' }
     ] },
     { section: 'OUTREACH', items: [

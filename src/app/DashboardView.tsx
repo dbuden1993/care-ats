@@ -1,5 +1,6 @@
 'use client';
-import { useMemo, useEffect, useState } from 'react';
+
+import { useState, useEffect, useCallback } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 
 const supabase = createBrowserClient(
@@ -7,465 +8,482 @@ const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-interface Props {
+interface DashboardViewProps {
   candidates: any[];
   jobs: any[];
-  onNavigate: (section: string, filter?: any) => void;
+  onNavigate: (action: string, data?: any) => void;
+}
+
+interface DashboardStats {
+  totalCandidates: number;
+  calledCandidates: number;
+  importedPool: number;
+  gradeACandidates: number;
+  callsToday: number;
+  callsThisWeek: number;
+  pendingProcessing: number;
+  avgEnergyScore: number | null;
 }
 
 interface RecentCall {
-  id: string;
-  candidate_name: string;
+  call_id: string;
   phone_e164: string;
-  call_time: string;
+  candidate_name: string | null;
   energy_score: number | null;
   quality_assessment: string | null;
   call_summary: string | null;
+  call_time: string;
+  processing_status: string;
+  direction: string;
+  duration_ms: number | null;
 }
 
-export default function DashboardView({ candidates, jobs, onNavigate }: Props) {
-  const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
-  const [callStats, setCallStats] = useState({ today: 0, week: 0, gradeA: 0, unprocessed: 0 });
-  const [loadingCalls, setLoadingCalls] = useState(true);
-  
-  // WhatsApp stats
-  const [whatsappStats, setWhatsappStats] = useState({ today: 0, week: 0, inbound: 0, uniqueChats: 0 });
-  const [recentMessages, setRecentMessages] = useState<any[]>([]);
+interface PipelineCounts {
+  new: number;
+  screening: number;
+  interview: number;
+  offer: number;
+  hired: number;
+}
 
-  // Fetch recent calls from call_history
-  useEffect(() => {
-    async function loadCallData() {
-      setLoadingCalls(true);
-      
+export default function DashboardView({ candidates, jobs, onNavigate }: DashboardViewProps) {
+  const [stats, setStats] = useState<DashboardStats>({
+    totalCandidates: 0,
+    calledCandidates: 0,
+    importedPool: 0,
+    gradeACandidates: 0,
+    callsToday: 0,
+    callsThisWeek: 0,
+    pendingProcessing: 0,
+    avgEnergyScore: null,
+  });
+  const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
+  const [pipeline, setPipeline] = useState<PipelineCounts>({ new: 0, screening: 0, interview: 0, offer: 0, hired: 0 });
+  const [loading, setLoading] = useState(true);
+
+  const fetchDashboardData = useCallback(async () => {
+    setLoading(true);
+    try {
       const now = new Date();
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
+      const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).toISOString();
 
-      // Get recent calls
-      const { data: calls } = await supabase
-        .from('call_history')
-        .select('id, candidate_name, phone_e164, call_time, energy_score, quality_assessment, call_summary')
-        .order('call_time', { ascending: false })
-        .limit(10);
+      // Parallel queries for speed
+      const [
+        totalRes,
+        calledRes,
+        importedRes,
+        gradeARes,
+        callsTodayRes,
+        callsWeekRes,
+        pendingRes,
+        recentCallsRes,
+        pipelineRes,
+        energyRes,
+      ] = await Promise.all([
+        // Total candidates
+        supabase.from('candidates').select('*', { count: 'exact', head: true }),
+        // Called candidates (have been called at least once)
+        supabase.from('candidates').select('*', { count: 'exact', head: true }).not('last_called_at', 'is', null),
+        // Imported pool (never called)
+        supabase.from('candidates').select('*', { count: 'exact', head: true }).is('last_called_at', null),
+        // Grade A candidates from call_history
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).eq('quality_assessment', 'A'),
+        // Calls today
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).gte('call_time', todayStart),
+        // Calls this week
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).gte('call_time', weekStart),
+        // Pending processing
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).eq('processing_status', 'pending'),
+        // Recent calls (last 10)
+        supabase.from('call_history')
+          .select('call_id, phone_e164, candidate_name, energy_score, quality_assessment, call_summary, call_time, processing_status, direction, duration_ms')
+          .order('call_time', { ascending: false })
+          .limit(10),
+        // Pipeline counts - get all candidates with status
+        supabase.from('candidates')
+          .select('status')
+          .not('last_called_at', 'is', null),
+        // Average energy score
+        supabase.from('call_history')
+          .select('energy_score')
+          .not('energy_score', 'is', null)
+          .limit(100),
+      ]);
 
-      // Get call stats
-      const { count: todayCount } = await supabase
-        .from('call_history')
-        .select('id', { count: 'exact' })
-        .gte('call_time', todayStart);
-
-      const { count: weekCount } = await supabase
-        .from('call_history')
-        .select('id', { count: 'exact' })
-        .gte('call_time', weekAgo);
-
-      const { count: gradeACount } = await supabase
-        .from('call_history')
-        .select('id', { count: 'exact' })
-        .or('quality_assessment.eq.A,quality_assessment.eq.HIGH');
-
-      const { data: unprocessedData } = await supabase
-        .from('call_history')
-        .select('id, candidate_name')
-        .or('candidate_name.is.null,candidate_name.ilike.%unknown%');
-
-      setRecentCalls(calls || []);
-      setCallStats({
-        today: todayCount || 0,
-        week: weekCount || 0,
-        gradeA: gradeACount || 0,
-        unprocessed: unprocessedData?.length || 0
+      // Compute pipeline counts
+      const pipelineCounts: PipelineCounts = { new: 0, screening: 0, interview: 0, offer: 0, hired: 0 };
+      (pipelineRes.data || []).forEach((c: any) => {
+        const s = c.status as keyof PipelineCounts;
+        if (s in pipelineCounts) pipelineCounts[s]++;
       });
-      
-      // Fetch WhatsApp stats
-      try {
-        const { count: waTodayCount } = await supabase
-          .from('whatsapp_messages')
-          .select('id', { count: 'exact' })
-          .gte('message_timestamp', todayStart);
-        
-        const { count: waWeekCount } = await supabase
-          .from('whatsapp_messages')
-          .select('id', { count: 'exact' })
-          .gte('message_timestamp', weekAgo);
-        
-        const { count: waInboundCount } = await supabase
-          .from('whatsapp_messages')
-          .select('id', { count: 'exact' })
-          .eq('direction', 'inbound')
-          .gte('message_timestamp', weekAgo);
-        
-        const { data: waRecent } = await supabase
-          .from('whatsapp_messages')
-          .select('id, chat_name, phone_e164, message_text, direction, message_timestamp, ai_intent')
-          .order('message_timestamp', { ascending: false })
-          .limit(5);
-        
-        // Count unique chats
-        const uniquePhones = new Set((waRecent || []).map(m => m.phone_e164 || m.chat_name));
-        
-        setWhatsappStats({
-          today: waTodayCount || 0,
-          week: waWeekCount || 0,
-          inbound: waInboundCount || 0,
-          uniqueChats: uniquePhones.size
-        });
-        setRecentMessages(waRecent || []);
-      } catch (e) {
-        console.log('WhatsApp messages table may not exist yet');
-      }
-      
-      setLoadingCalls(false);
-    }
 
-    loadCallData();
+      // Compute average energy
+      const energyScores = (energyRes.data || []).map((r: any) => r.energy_score).filter((s: any) => typeof s === 'number');
+      const avgEnergy = energyScores.length > 0 ? energyScores.reduce((a: number, b: number) => a + b, 0) / energyScores.length : null;
+
+      setStats({
+        totalCandidates: totalRes.count ?? 0,
+        calledCandidates: calledRes.count ?? 0,
+        importedPool: importedRes.count ?? 0,
+        gradeACandidates: gradeARes.count ?? 0,
+        callsToday: callsTodayRes.count ?? 0,
+        callsThisWeek: callsWeekRes.count ?? 0,
+        pendingProcessing: pendingRes.count ?? 0,
+        avgEnergyScore: avgEnergy,
+      });
+
+      setRecentCalls(recentCallsRes.data || []);
+      setPipeline(pipelineCounts);
+    } catch (e) {
+      console.error('Dashboard fetch error:', e);
+    }
+    setLoading(false);
   }, []);
 
-  const metrics = useMemo(() => {
-    const now = Date.now();
-    const weekAgo = now - 7 * 86400000;
-    const monthAgo = now - 30 * 86400000;
+  useEffect(() => {
+    fetchDashboardData();
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchDashboardData, 30000);
+    return () => clearInterval(interval);
+  }, [fetchDashboardData]);
 
-    const newThisWeek = candidates.filter(c => new Date(c.created_at).getTime() > weekAgo).length;
-    const hiredThisMonth = candidates.filter(c => c.status === 'hired' && new Date(c.updated_at).getTime() > monthAgo).length;
-    
-    const byStatus: Record<string, number> = {};
-    candidates.forEach(c => { byStatus[c.status] = (byStatus[c.status] || 0) + 1; });
-
-    const openJobs = jobs.filter(j => j.status === 'open');
-    
-    const conversionRate = candidates.length > 0 
-      ? Math.round(((byStatus['hired'] || 0) / candidates.length) * 100)
-      : 0;
-
-    return { 
-      newThisWeek, 
-      hiredThisMonth, 
-      byStatus, 
-      openJobs: openJobs.length, 
-      conversionRate,
-      total: candidates.length
-    };
-  }, [candidates, jobs]);
-
-  // Top candidates from call history (Grade A/B with high energy)
-  const topCandidates = recentCalls
-    .filter(c => c.candidate_name && !c.candidate_name.toLowerCase().includes('unknown'))
-    .filter(c => c.quality_assessment === 'A' || c.quality_assessment === 'B' || c.quality_assessment === 'HIGH')
-    .sort((a, b) => (b.energy_score || 0) - (a.energy_score || 0))
-    .slice(0, 5);
-
-  const getQualityColor = (quality: string | null) => {
-    const q = quality?.toUpperCase();
-    switch (q) {
-      case 'A': case 'HIGH': return { bg: '#dcfce7', text: '#166534' };
-      case 'B': return { bg: '#dbeafe', text: '#1e40af' };
-      case 'C': case 'MEDIUM': return { bg: '#fef9c3', text: '#854d0e' };
-      default: return { bg: '#fee2e2', text: '#991b1b' };
-    }
-  };
-
-  const getEnergyColor = (score: number | null) => {
-    if (!score) return '#9ca3af';
-    if (score >= 8) return '#22c55e';
-    if (score >= 6) return '#3b82f6';
-    if (score >= 4) return '#eab308';
-    return '#ef4444';
-  };
-
-  const formatPhone = (phone: string) => {
-    if (!phone) return '';
-    if (phone.startsWith('+44')) {
-      return phone.replace('+44', '0').replace(/(\d{5})(\d{6})/, '$1 $2');
-    }
-    return phone;
-  };
-
-  const formatTime = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = (now.getTime() - date.getTime()) / 1000;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  };
-
-  const greeting = (() => {
-    const hour = new Date().getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
+  const greeting = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
     return 'Good evening';
-  })();
+  };
+
+  const formatDuration = (ms: number | null) => {
+    if (!ms) return '—';
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
+  };
+
+  const formatTimeAgo = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  };
+
+  const gradeColor = (grade: string | null) => {
+    switch (grade) {
+      case 'A': return { bg: '#dcfce7', color: '#15803d', border: '#bbf7d0' };
+      case 'B': return { bg: '#dbeafe', color: '#1d4ed8', border: '#bfdbfe' };
+      case 'C': return { bg: '#fef9c3', color: '#a16207', border: '#fef08a' };
+      case 'D': return { bg: '#fed7aa', color: '#c2410c', border: '#fdba74' };
+      case 'F': return { bg: '#fecaca', color: '#dc2626', border: '#fca5a5' };
+      default: return { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb' };
+    }
+  };
+
+  const energyColor = (score: number | null) => {
+    if (!score) return '#9ca3af';
+    if (score >= 8) return '#15803d';
+    if (score >= 6) return '#2563eb';
+    if (score >= 4) return '#d97706';
+    return '#dc2626';
+  };
+
+  const processingBadge = (status: string) => {
+    switch (status) {
+      case 'completed': return null;
+      case 'processing': return { label: 'Processing...', bg: '#dbeafe', color: '#2563eb' };
+      case 'pending': return { label: 'Queued', bg: '#fef9c3', color: '#a16207' };
+      case 'failed': return { label: 'Failed', bg: '#fecaca', color: '#dc2626' };
+      case 'no_recording': return { label: 'No recording', bg: '#f3f4f6', color: '#6b7280' };
+      default: return null;
+    }
+  };
 
   return (
-    <div style={{ padding: 24, background: '#f8fafc', minHeight: '100%' }}>
+    <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto' }}>
       <style>{`
-        .dash-header{margin-bottom:24px}
-        .dash-greeting{font-size:24px;font-weight:700;color:#111;margin-bottom:4px}
-        .dash-subtext{font-size:14px;color:#6b7280}
-        .dash-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:24px}
-        @media(max-width:1200px){.dash-grid{grid-template-columns:repeat(3,1fr)}}
-        @media(max-width:768px){.dash-grid{grid-template-columns:repeat(2,1fr)}}
-        .dash-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:20px;transition:all .2s;cursor:pointer}
-        .dash-card:hover{box-shadow:0 8px 24px rgba(0,0,0,.08);transform:translateY(-2px)}
-        .dash-card.highlight{border:2px solid #f59e0b;background:linear-gradient(135deg,#fffbeb,#fef3c7)}
-        .dash-card-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:12px}
-        .dash-card-value{font-size:32px;font-weight:800;color:#111;margin-bottom:4px}
-        .dash-card-label{font-size:12px;color:#6b7280;font-weight:500}
-        .dash-card-sub{font-size:11px;color:#9ca3af;margin-top:4px}
-        .dash-section{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px}
-        @media(max-width:1000px){.dash-section{grid-template-columns:1fr}}
-        .dash-panel{background:#fff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden}
-        .dash-panel-header{padding:16px 20px;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between;align-items:center}
-        .dash-panel-title{font-size:15px;font-weight:600;color:#111;display:flex;align-items:center;gap:8px}
-        .dash-panel-link{font-size:12px;color:#6366f1;cursor:pointer;font-weight:500}
-        .dash-panel-link:hover{text-decoration:underline}
-        .dash-panel-body{padding:16px}
-        .dash-call{display:flex;align-items:center;gap:14px;padding:12px;border-radius:10px;cursor:pointer;transition:all .15s;margin-bottom:8px}
-        .dash-call:last-child{margin-bottom:0}
-        .dash-call:hover{background:#f9fafb}
-        .dash-call-grade{padding:6px 10px;border-radius:6px;font-weight:700;font-size:13px;min-width:32px;text-align:center}
-        .dash-call-info{flex:1;min-width:0}
-        .dash-call-name{font-size:14px;font-weight:600;color:#111}
-        .dash-call-phone{font-size:12px;color:#6b7280;font-family:monospace}
-        .dash-call-summary{font-size:11px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px}
-        .dash-call-energy{text-align:center}
-        .dash-call-energy-value{font-size:18px;font-weight:700}
-        .dash-call-energy-label{font-size:9px;color:#9ca3af}
-        .dash-call-time{font-size:11px;color:#9ca3af}
-        .dash-quick{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-        .dash-quick-btn{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;cursor:pointer;transition:all .15s}
-        .dash-quick-btn:hover{background:#fff;border-color:#d1d5db;box-shadow:0 4px 12px rgba(0,0,0,.05);transform:translateY(-2px)}
-        .dash-quick-icon{font-size:24px}
-        .dash-quick-label{font-size:12px;font-weight:600;color:#374151}
-        .dash-funnel{display:flex;flex-direction:column;gap:10px}
-        .dash-funnel-row{display:flex;align-items:center;gap:12px}
-        .dash-funnel-label{width:70px;font-size:12px;color:#374151;font-weight:500}
-        .dash-funnel-bar{flex:1;height:24px;background:#f3f4f6;border-radius:6px;overflow:hidden;position:relative}
-        .dash-funnel-fill{height:100%;display:flex;align-items:center;padding-left:10px;font-size:11px;font-weight:600;color:#fff;border-radius:6px;transition:width .5s ease}
-        .dash-empty{text-align:center;padding:40px;color:#9ca3af;font-size:13px}
+        .dash-header { margin-bottom: 28px; }
+        .dash-greeting { font-size: 26px; font-weight: 800; color: #111827; letter-spacing: -0.5px; }
+        .dash-subtitle { font-size: 14px; color: #6b7280; margin-top: 4px; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+        .stat-tile {
+          background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 20px;
+          cursor: pointer; transition: all 0.15s ease;
+          position: relative; overflow: hidden;
+        }
+        .stat-tile:hover { border-color: #c7d2fe; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .stat-tile .accent-bar { position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+        .stat-number { font-size: 32px; font-weight: 800; color: #111827; line-height: 1; }
+        .stat-label { font-size: 12px; font-weight: 600; color: #6b7280; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-detail { font-size: 11px; color: #9ca3af; margin-top: 4px; }
+
+        .dash-grid { display: grid; grid-template-columns: 1fr 340px; gap: 20px; }
+        .dash-section {
+          background: #fff; border: 1px solid #e5e7eb; border-radius: 14px;
+          overflow: hidden;
+        }
+        .section-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 16px 20px; border-bottom: 1px solid #f3f4f6;
+        }
+        .section-title { font-size: 15px; font-weight: 700; color: #111827; display: flex; align-items: center; gap: 8px; }
+        .section-link {
+          font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;
+          text-decoration: none; transition: color 0.15s;
+        }
+        .section-link:hover { color: #3730a3; }
+
+        .call-row {
+          display: flex; align-items: center; gap: 14px; padding: 14px 20px;
+          border-bottom: 1px solid #f9fafb; cursor: pointer; transition: background 0.1s;
+        }
+        .call-row:last-child { border-bottom: none; }
+        .call-row:hover { background: #fafbfc; }
+        .call-avatar {
+          width: 40px; height: 40px; border-radius: 10px; display: flex;
+          align-items: center; justify-content: center; font-weight: 700;
+          font-size: 14px; flex-shrink: 0;
+        }
+        .call-info { flex: 1; min-width: 0; }
+        .call-name { font-size: 13px; font-weight: 600; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .call-phone { font-size: 11px; color: #9ca3af; font-family: 'SF Mono', 'Fira Code', monospace; letter-spacing: 0.3px; }
+        .call-summary { font-size: 11px; color: #6b7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+        .call-meta { text-align: right; flex-shrink: 0; }
+        .call-energy { font-size: 22px; font-weight: 800; line-height: 1; }
+        .call-energy-label { font-size: 9px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; }
+        .call-time { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+
+        .grade-badge {
+          display: inline-flex; align-items: center; justify-content: center;
+          width: 26px; height: 26px; border-radius: 7px; font-size: 12px;
+          font-weight: 800; border: 1.5px solid;
+        }
+        .processing-badge {
+          display: inline-block; padding: 2px 8px; border-radius: 6px;
+          font-size: 10px; font-weight: 600;
+        }
+
+        .pipeline-bar { padding: 20px; }
+        .pipeline-stage {
+          display: flex; align-items: center; gap: 12px; padding: 10px 0;
+          border-bottom: 1px solid #f9fafb;
+        }
+        .pipeline-stage:last-child { border-bottom: none; }
+        .pipeline-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .pipeline-label { font-size: 13px; color: #374151; flex: 1; font-weight: 500; }
+        .pipeline-count { font-size: 15px; font-weight: 800; color: #111827; min-width: 30px; text-align: right; }
+        .pipeline-bar-fill {
+          height: 6px; border-radius: 3px; transition: width 0.5s ease;
+        }
+
+        .quick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 16px 20px; }
+        .quick-btn {
+          display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+          border: 1px solid #e5e7eb; border-radius: 10px; cursor: pointer;
+          background: #fff; font-size: 12px; font-weight: 600; color: #374151;
+          transition: all 0.15s;
+        }
+        .quick-btn:hover { background: #f9fafb; border-color: #c7d2fe; color: #4f46e5; }
+        .quick-btn .qicon { font-size: 16px; }
+
+        .empty-calls { padding: 40px 20px; text-align: center; color: #9ca3af; font-size: 13px; }
+
+        @keyframes shimmer {
+          0% { background-position: -200px 0; }
+          100% { background-position: calc(200px + 100%) 0; }
+        }
+        .skeleton {
+          background: linear-gradient(90deg, #f3f4f6 0px, #e5e7eb 40px, #f3f4f6 80px);
+          background-size: 200px 100%;
+          animation: shimmer 1.5s infinite;
+          border-radius: 8px;
+        }
       `}</style>
 
       {/* Header */}
       <div className="dash-header">
-        <h1 className="dash-greeting">{greeting}! 👋</h1>
-        <p className="dash-subtext">Here's your recruitment overview</p>
+        <div className="dash-greeting">{greeting()}! 👋</div>
+        <div className="dash-subtitle">
+          Here&apos;s your recruitment overview
+          {stats.pendingProcessing > 0 && (
+            <span style={{ marginLeft: 12, padding: '2px 10px', background: '#fef9c3', color: '#a16207', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
+              {stats.pendingProcessing} call{stats.pendingProcessing !== 1 ? 's' : ''} processing
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* KPI Cards */}
+      {/* Stats tiles */}
+      <div className="stats-grid">
+        <div className="stat-tile" onClick={() => onNavigate('call-history')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #4f46e5, #7c3aed)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 60, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number">{stats.callsToday}</div>
+          )}
+          <div className="stat-label">Calls Today</div>
+          <div className="stat-detail">{stats.callsThisWeek} this week</div>
+        </div>
+
+        <div className="stat-tile" onClick={() => onNavigate('candidate-dashboard')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #059669, #10b981)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 40, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number" style={{ color: '#059669' }}>{stats.gradeACandidates}</div>
+          )}
+          <div className="stat-label">Grade A Candidates</div>
+          <div className="stat-detail">
+            {stats.avgEnergyScore !== null ? `Avg energy: ${stats.avgEnergyScore.toFixed(1)}/10` : 'No scores yet'}
+          </div>
+        </div>
+
+        <div className="stat-tile" onClick={() => onNavigate('candidate-dashboard')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #2563eb, #3b82f6)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 50, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number">{stats.calledCandidates}</div>
+          )}
+          <div className="stat-label">Total Called</div>
+          <div className="stat-detail">of {stats.totalCandidates} total candidates</div>
+        </div>
+
+        <div className="stat-tile" onClick={() => onNavigate('imported')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #d97706, #f59e0b)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 50, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number" style={{ color: '#d97706' }}>{stats.importedPool}</div>
+          )}
+          <div className="stat-label">To Contact</div>
+          <div className="stat-detail">Imported, not yet called</div>
+        </div>
+      </div>
+
+      {/* Main grid: Calls + Sidebar */}
       <div className="dash-grid">
-        <div className="dash-card" onClick={() => onNavigate('call-history')}>
-          <div className="dash-card-icon" style={{ background: '#dbeafe' }}>📞</div>
-          <div className="dash-card-value">{callStats.today}</div>
-          <div className="dash-card-label">Calls Today</div>
-          <div className="dash-card-sub">{callStats.week} this week</div>
-        </div>
-        
-        <div className="dash-card" onClick={() => onNavigate('call-history')}>
-          <div className="dash-card-icon" style={{ background: '#dcfce7' }}>⭐</div>
-          <div className="dash-card-value" style={{ color: '#16a34a' }}>{callStats.gradeA}</div>
-          <div className="dash-card-label">Grade A Candidates</div>
-        </div>
-
-        {callStats.unprocessed > 0 && (
-          <div className="dash-card highlight" onClick={() => onNavigate('call-history')}>
-            <div className="dash-card-icon" style={{ background: '#fef3c7' }}>⏳</div>
-            <div className="dash-card-value" style={{ color: '#d97706' }}>{callStats.unprocessed}</div>
-            <div className="dash-card-label">Unprocessed Calls</div>
-            <div className="dash-card-sub">Needs grading</div>
-          </div>
-        )}
-        
-        <div className="dash-card" onClick={() => onNavigate('candidates')}>
-          <div className="dash-card-icon" style={{ background: '#eef2ff' }}>👥</div>
-          <div className="dash-card-value">{metrics.total}</div>
-          <div className="dash-card-label">Total Called</div>
-          <div className="dash-card-sub">+{metrics.newThisWeek} this week</div>
-        </div>
-        
-        <div className="dash-card" onClick={() => onNavigate('imported')}>
-          <div className="dash-card-icon" style={{ background: '#f3e8ff' }}>📥</div>
-          <div className="dash-card-value">{candidates.filter(c => !c.last_called_at).length || 0}</div>
-          <div className="dash-card-label">To Contact</div>
-        </div>
-        
-        <div className="dash-card" onClick={() => onNavigate('whatsapp')}>
-          <div className="dash-card-icon" style={{ background: '#dcfce7' }}>💬</div>
-          <div className="dash-card-value" style={{ color: '#16a34a' }}>{whatsappStats.today}</div>
-          <div className="dash-card-label">WhatsApp Today</div>
-          <div className="dash-card-sub">{whatsappStats.inbound} inbound this week</div>
-        </div>
-      </div>
-
-      <div className="dash-section">
         {/* Recent Calls */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">📞 Recent Calls</span>
-            <span className="dash-panel-link" onClick={() => onNavigate('call-history')}>View all →</span>
+        <div className="dash-section">
+          <div className="section-header">
+            <div className="section-title">📞 Recent Calls</div>
+            <span className="section-link" onClick={() => onNavigate('candidate-dashboard')}>View all →</span>
           </div>
-          <div className="dash-panel-body" style={{ padding: '8px 12px' }}>
-            {loadingCalls ? (
-              <div className="dash-empty">Loading calls...</div>
-            ) : recentCalls.length === 0 ? (
-              <div className="dash-empty">No calls yet. Start calling candidates!</div>
-            ) : (
-              recentCalls.slice(0, 5).map(call => {
-                const colors = getQualityColor(call.quality_assessment);
-                return (
-                  <div key={call.id} className="dash-call" onClick={() => onNavigate('call-history')}>
-                    <div className="dash-call-grade" style={{ background: colors.bg, color: colors.text }}>
-                      {call.quality_assessment?.toUpperCase() || '-'}
-                    </div>
-                    <div className="dash-call-info">
-                      <div className="dash-call-name">{call.candidate_name || 'Unknown'}</div>
-                      <div className="dash-call-phone">{formatPhone(call.phone_e164)}</div>
-                      {call.call_summary && (
-                        <div className="dash-call-summary">{call.call_summary}</div>
+          {loading ? (
+            <div style={{ padding: 20 }}>
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} style={{ display: 'flex', gap: 14, alignItems: 'center', padding: '12px 0' }}>
+                  <div className="skeleton" style={{ width: 40, height: 40, borderRadius: 10 }} />
+                  <div style={{ flex: 1 }}>
+                    <div className="skeleton" style={{ width: 120, height: 14, marginBottom: 6 }} />
+                    <div className="skeleton" style={{ width: 90, height: 10 }} />
+                  </div>
+                  <div className="skeleton" style={{ width: 30, height: 30, borderRadius: 8 }} />
+                </div>
+              ))}
+            </div>
+          ) : recentCalls.length === 0 ? (
+            <div className="empty-calls">
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📞</div>
+              <div>No calls recorded yet</div>
+              <div style={{ fontSize: 11, marginTop: 4 }}>Calls from Dialpad will appear here automatically</div>
+            </div>
+          ) : (
+            recentCalls.map((call) => {
+              const gc = gradeColor(call.quality_assessment);
+              const badge = processingBadge(call.processing_status);
+              const initial = call.candidate_name
+                ? call.candidate_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()
+                : '?';
+              const avatarBg = call.candidate_name
+                ? `hsl(${call.candidate_name.charCodeAt(0) * 7 % 360}, 55%, 55%)`
+                : '#d1d5db';
+
+              return (
+                <div key={call.call_id} className="call-row" onClick={() => onNavigate('candidate-dashboard')}>
+                  <div className="call-avatar" style={{ background: avatarBg, color: '#fff' }}>
+                    {initial}
+                  </div>
+                  <div className="call-info">
+                    <div className="call-name">
+                      {call.candidate_name || 'Unknown'}
+                      {call.quality_assessment && (
+                        <span
+                          className="grade-badge"
+                          style={{ background: gc.bg, color: gc.color, borderColor: gc.border, marginLeft: 8 }}
+                        >
+                          {call.quality_assessment}
+                        </span>
+                      )}
+                      {badge && (
+                        <span className="processing-badge" style={{ background: badge.bg, color: badge.color, marginLeft: 6 }}>
+                          {badge.label}
+                        </span>
                       )}
                     </div>
-                    <div className="dash-call-energy">
-                      <div className="dash-call-energy-value" style={{ color: getEnergyColor(call.energy_score) }}>
-                        {call.energy_score || '-'}
-                      </div>
-                      <div className="dash-call-energy-label">Energy</div>
+                    <div className="call-phone">
+                      {call.phone_e164 || '—'}
+                      {call.duration_ms ? ` · ${formatDuration(call.duration_ms)}` : ''}
                     </div>
-                    <div className="dash-call-time">{formatTime(call.call_time)}</div>
+                    {call.call_summary && (
+                      <div className="call-summary">{call.call_summary}</div>
+                    )}
                   </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Recent WhatsApp Messages */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">💬 Recent WhatsApp</span>
-            <span className="dash-panel-link" onClick={() => onNavigate('whatsapp')}>View all →</span>
-          </div>
-          <div className="dash-panel-body" style={{ padding: '8px 12px' }}>
-            {recentMessages.length === 0 ? (
-              <div className="dash-empty">
-                <div style={{ fontSize: 32, marginBottom: 8 }}>💬</div>
-                No WhatsApp messages captured yet
-              </div>
-            ) : (
-              recentMessages.map(msg => (
-                <div key={msg.id} className="dash-call" style={{ cursor: 'pointer' }} onClick={() => onNavigate('whatsapp')}>
-                  <div className="dash-call-grade" style={{ 
-                    background: msg.direction === 'inbound' ? '#dbeafe' : '#dcfce7', 
-                    color: msg.direction === 'inbound' ? '#1e40af' : '#166534',
-                    fontSize: 16
-                  }}>
-                    {msg.direction === 'inbound' ? '📥' : '📤'}
+                  <div className="call-meta">
+                    {call.energy_score ? (
+                      <>
+                        <div className="call-energy" style={{ color: energyColor(call.energy_score) }}>
+                          {call.energy_score}
+                        </div>
+                        <div className="call-energy-label">Energy</div>
+                      </>
+                    ) : (
+                      <div style={{ color: '#d1d5db', fontSize: 13 }}>—</div>
+                    )}
+                    <div className="call-time">{formatTimeAgo(call.call_time)}</div>
                   </div>
-                  <div className="dash-call-info">
-                    <div className="dash-call-name">{msg.chat_name || msg.phone_e164}</div>
-                    <div className="dash-call-summary" style={{ 
-                      maxWidth: 200, 
-                      overflow: 'hidden', 
-                      textOverflow: 'ellipsis', 
-                      whiteSpace: 'nowrap' 
-                    }}>
-                      {msg.message_text}
-                    </div>
-                  </div>
-                  {msg.ai_intent && (
-                    <div style={{ 
-                      fontSize: 11, 
-                      background: '#e0e7ff', 
-                      color: '#4f46e5', 
-                      padding: '2px 8px', 
-                      borderRadius: 8 
-                    }}>
-                      {msg.ai_intent}
-                    </div>
-                  )}
-                  <div className="dash-call-time">{formatTime(msg.message_timestamp)}</div>
                 </div>
-              ))
-            )}
-          </div>
+              );
+            })
+          )}
         </div>
 
-        {/* Top Candidates */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">🌟 Top Candidates</span>
-            <span className="dash-panel-link" onClick={() => onNavigate('call-history')}>View all →</span>
-          </div>
-          <div className="dash-panel-body" style={{ padding: '8px 12px' }}>
-            {topCandidates.length === 0 ? (
-              <div className="dash-empty">
-                <div style={{ fontSize: 32, marginBottom: 8 }}>🎯</div>
-                Make some calls to find top candidates!
-              </div>
-            ) : (
-              topCandidates.map(call => {
-                const colors = getQualityColor(call.quality_assessment);
-                return (
-                  <div key={call.id} className="dash-call" onClick={() => onNavigate('call-history')}>
-                    <div className="dash-call-grade" style={{ background: colors.bg, color: colors.text }}>
-                      {call.quality_assessment?.toUpperCase()}
-                    </div>
-                    <div className="dash-call-info">
-                      <div className="dash-call-name">{call.candidate_name}</div>
-                      <div className="dash-call-phone">{formatPhone(call.phone_e164)}</div>
-                    </div>
-                    <div className="dash-call-energy">
-                      <div className="dash-call-energy-value" style={{ color: getEnergyColor(call.energy_score) }}>
-                        {call.energy_score}
-                      </div>
-                      <div className="dash-call-energy-label">Energy</div>
-                    </div>
-                    <a
-                      href={`tel:${call.phone_e164}`}
-                      onClick={e => e.stopPropagation()}
-                      style={{
-                        padding: '6px 12px',
-                        background: '#22c55e',
-                        color: 'white',
-                        borderRadius: '6px',
-                        textDecoration: 'none',
-                        fontSize: '12px',
-                        fontWeight: '500'
-                      }}
-                    >
-                      📞 Call
-                    </a>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="dash-section">
-        {/* Pipeline */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">📊 Pipeline</span>
-            <span className="dash-panel-link" onClick={() => onNavigate('candidates')}>View all →</span>
-          </div>
-          <div className="dash-panel-body">
-            <div className="dash-funnel">
+        {/* Right sidebar */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Pipeline */}
+          <div className="dash-section">
+            <div className="section-header">
+              <div className="section-title">📊 Pipeline</div>
+              <span className="section-link" onClick={() => onNavigate('candidates')}>View all →</span>
+            </div>
+            <div className="pipeline-bar">
               {[
-                { stage: 'New', count: metrics.byStatus['new'] || 0, color: '#6366f1' },
-                { stage: 'Screening', count: metrics.byStatus['screening'] || 0, color: '#8b5cf6' },
-                { stage: 'Interview', count: metrics.byStatus['interview'] || 0, color: '#f59e0b' },
-                { stage: 'Offer', count: metrics.byStatus['offer'] || 0, color: '#10b981' },
-                { stage: 'Hired', count: metrics.byStatus['hired'] || 0, color: '#059669' },
-              ].map(row => {
-                const maxCount = Math.max(...Object.values(metrics.byStatus), 1);
-                const width = Math.max((row.count / maxCount) * 100, row.count > 0 ? 15 : 5);
+                { key: 'new', label: 'New', color: '#6366f1', count: pipeline.new },
+                { key: 'screening', label: 'Screening', color: '#f59e0b', count: pipeline.screening },
+                { key: 'interview', label: 'Interview', color: '#3b82f6', count: pipeline.interview },
+                { key: 'offer', label: 'Offer', color: '#8b5cf6', count: pipeline.offer },
+                { key: 'hired', label: 'Hired', color: '#10b981', count: pipeline.hired },
+              ].map((stage) => {
+                const total = pipeline.new + pipeline.screening + pipeline.interview + pipeline.offer + pipeline.hired;
+                const pct = total > 0 ? (stage.count / total) * 100 : 0;
                 return (
-                  <div key={row.stage} className="dash-funnel-row" onClick={() => onNavigate('candidates', { status: row.stage.toLowerCase() })}>
-                    <span className="dash-funnel-label">{row.stage}</span>
-                    <div className="dash-funnel-bar">
-                      <div className="dash-funnel-fill" style={{ width: `${width}%`, background: row.color }}>
-                        {row.count > 0 && row.count}
+                  <div key={stage.key} className="pipeline-stage" onClick={() => onNavigate('candidates', { status: stage.key })}>
+                    <div className="pipeline-dot" style={{ background: stage.color }} />
+                    <div className="pipeline-label">{stage.label}</div>
+                    <div className="pipeline-count">{stage.count}</div>
+                    <div style={{ width: 60 }}>
+                      <div style={{ background: '#f3f4f6', borderRadius: 3, height: 6, overflow: 'hidden' }}>
+                        <div className="pipeline-bar-fill" style={{ width: `${pct}%`, background: stage.color }} />
                       </div>
                     </div>
                   </div>
@@ -473,38 +491,30 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Props) {
               })}
             </div>
           </div>
-        </div>
 
-        {/* Quick Actions */}
-        <div className="dash-panel">
-          <div className="dash-panel-header">
-            <span className="dash-panel-title">🚀 Quick Actions</span>
-          </div>
-          <div className="dash-panel-body">
-            <div className="dash-quick">
-              <div className="dash-quick-btn" onClick={() => onNavigate('call-history')}>
-                <span className="dash-quick-icon">📞</span>
-                <span className="dash-quick-label">Call History</span>
+          {/* Quick Actions */}
+          <div className="dash-section">
+            <div className="section-header">
+              <div className="section-title">🚀 Quick Actions</div>
+            </div>
+            <div className="quick-grid">
+              <div className="quick-btn" onClick={() => onNavigate('candidate-dashboard')}>
+                <span className="qicon">📞</span> Call History
               </div>
-              <div className="dash-quick-btn" onClick={() => onNavigate('candidates')}>
-                <span className="dash-quick-icon">👥</span>
-                <span className="dash-quick-label">All Candidates</span>
+              <div className="quick-btn" onClick={() => onNavigate('candidates')}>
+                <span className="qicon">👥</span> Pipeline
               </div>
-              <div className="dash-quick-btn" onClick={() => onNavigate('imported')}>
-                <span className="dash-quick-icon">📥</span>
-                <span className="dash-quick-label">Import CSV</span>
+              <div className="quick-btn" onClick={() => onNavigate('imported')}>
+                <span className="qicon">📥</span> Import CSV
               </div>
-              <div className="dash-quick-btn" onClick={() => onNavigate('sms')}>
-                <span className="dash-quick-icon">📱</span>
-                <span className="dash-quick-label">SMS Campaign</span>
+              <div className="quick-btn" onClick={() => onNavigate('sms')}>
+                <span className="qicon">📱</span> SMS Campaign
               </div>
-              <div className="dash-quick-btn" onClick={() => onNavigate('whatsapp')}>
-                <span className="dash-quick-icon">💬</span>
-                <span className="dash-quick-label">WhatsApp</span>
+              <div className="quick-btn" onClick={() => onNavigate('whatsapp')}>
+                <span className="qicon">💬</span> WhatsApp
               </div>
-              <div className="dash-quick-btn" onClick={() => onNavigate('reports')}>
-                <span className="dash-quick-icon">📈</span>
-                <span className="dash-quick-label">Reports</span>
+              <div className="quick-btn" onClick={() => onNavigate('reports')}>
+                <span className="qicon">📈</span> Reports
               </div>
             </div>
           </div>
