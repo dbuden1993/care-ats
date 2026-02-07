@@ -1,0 +1,4726 @@
+﻿
+
+===== src\app\CandidateDashboard.tsx =====
+
+'use client';
+import React, { useEffect, useState, useMemo } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+interface CallRecord {
+  id: string;
+  call_id: string;
+  phone_e164: string;
+  call_time: string;
+  direction: string;
+  duration_ms: number | null;
+  candidate_name: string | null;
+  experience_summary: string | null;
+  call_summary: string | null;
+  roles: string[];
+  driver: string | null;
+  dbs_status: string | null;
+  mandatory_training: string | null;
+  earliest_start_date: string | null;
+  weekly_rota: string | null;
+  energy_score: number | null;
+  quality_assessment: string | null;
+  follow_up_questions: string[];
+  call_type: string | null;
+  transcript: string | null;
+  recording_url: string | null;
+}
+
+interface CandidateDashboardProps {
+  onSelectCandidate?: (candidate: any) => void;
+}
+
+type GradeFilter = 'all' | 'A' | 'B' | 'C' | 'D';
+type AvailabilityFilter = 'all' | 'immediate' | 'week' | 'month';
+type RoleFilter = string;
+
+export default function CandidateDashboard({ onSelectCandidate }: CandidateDashboardProps) {
+  const [calls, setCalls] = useState<CallRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [gradeFilter, setGradeFilter] = useState<GradeFilter>('all');
+  const [availabilityFilter, setAvailabilityFilter] = useState<AvailabilityFilter>('all');
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
+  const [complianceFilter, setComplianceFilter] = useState<'all' | 'driver' | 'dbs'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showTranscript, setShowTranscript] = useState<string | null>(null);
+  const [showHotCandidates, setShowHotCandidates] = useState(true);
+
+  useEffect(() => {
+    fetchCalls();
+  }, []);
+
+  async function fetchCalls() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('call_history')
+      .select('*')
+      .order('call_time', { ascending: false })
+      .limit(500);
+
+    if (error) {
+      console.error('Error fetching calls:', error);
+    } else {
+      const graded = (data || []).filter(c => 
+        c.candidate_name && 
+        c.candidate_name !== 'Unknown' && 
+        c.candidate_name !== 'Unknown Candidate' &&
+        !c.candidate_name.toLowerCase().includes('unknown')
+      );
+      setCalls(graded);
+    }
+    setLoading(false);
+  }
+
+  // Get unique roles across all candidates
+  const allRoles = useMemo(() => {
+    const roles = new Set<string>();
+    calls.forEach(c => c.roles?.forEach(r => roles.add(r)));
+    return Array.from(roles).sort();
+  }, [calls]);
+
+  // Check if candidate is available soon
+  const getAvailabilityStatus = (dateStr: string | null) => {
+    if (!dateStr) return null;
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffDays = Math.ceil((date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (diffDays <= 0) return { label: 'Immediate', color: '#059669', bg: '#d1fae5', days: 0 };
+    if (diffDays <= 7) return { label: `${diffDays}d`, color: '#2563eb', bg: '#dbeafe', days: diffDays };
+    if (diffDays <= 30) return { label: `${Math.ceil(diffDays / 7)}w`, color: '#d97706', bg: '#fef3c7', days: diffDays };
+    return { label: `${Math.ceil(diffDays / 30)}mo`, color: '#6b7280', bg: '#f3f4f6', days: diffDays };
+  };
+
+  // Hot candidates = Grade A/B + available within 2 weeks + has compliance
+  const hotCandidates = useMemo(() => {
+    return calls.filter(c => {
+      const grade = c.quality_assessment?.toUpperCase();
+      if (!['A', 'HIGH', 'B'].includes(grade || '')) return false;
+      
+      const avail = getAvailabilityStatus(c.earliest_start_date);
+      if (!avail || avail.days > 14) return false;
+      
+      return true;
+    }).slice(0, 5);
+  }, [calls]);
+
+  // Filtered calls
+  const filteredCalls = useMemo(() => {
+    let result = [...calls];
+
+    // Grade filter
+    if (gradeFilter !== 'all') {
+      result = result.filter(c => {
+        const grade = c.quality_assessment?.toUpperCase();
+        if (gradeFilter === 'D') return ['D', 'F', 'LOW'].includes(grade || '');
+        if (gradeFilter === 'A') return ['A', 'HIGH'].includes(grade || '');
+        if (gradeFilter === 'C') return ['C', 'MEDIUM'].includes(grade || '');
+        return grade === gradeFilter;
+      });
+    }
+
+    // Availability filter
+    if (availabilityFilter !== 'all') {
+      result = result.filter(c => {
+        const avail = getAvailabilityStatus(c.earliest_start_date);
+        if (!avail) return false;
+        if (availabilityFilter === 'immediate') return avail.days <= 0;
+        if (availabilityFilter === 'week') return avail.days <= 7;
+        if (availabilityFilter === 'month') return avail.days <= 30;
+        return true;
+      });
+    }
+
+    // Role filter
+    if (roleFilter !== 'all') {
+      result = result.filter(c => c.roles?.some(r => r.toLowerCase().includes(roleFilter.toLowerCase())));
+    }
+
+    // Compliance filter
+    if (complianceFilter === 'driver') {
+      result = result.filter(c => c.driver === 'Yes');
+    } else if (complianceFilter === 'dbs') {
+      result = result.filter(c => c.dbs_status && !c.dbs_status.toLowerCase().includes('no'));
+    }
+
+    // Search
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(c =>
+        c.candidate_name?.toLowerCase().includes(q) ||
+        c.phone_e164?.includes(q) ||
+        c.call_summary?.toLowerCase().includes(q) ||
+        c.experience_summary?.toLowerCase().includes(q) ||
+        c.roles?.some(r => r.toLowerCase().includes(q))
+      );
+    }
+
+    return result;
+  }, [calls, gradeFilter, availabilityFilter, roleFilter, complianceFilter, searchQuery]);
+
+  // Stats
+  const stats = useMemo(() => ({
+    total: calls.length,
+    gradeA: calls.filter(c => ['A', 'HIGH'].includes(c.quality_assessment?.toUpperCase() || '')).length,
+    gradeB: calls.filter(c => c.quality_assessment?.toUpperCase() === 'B').length,
+    gradeC: calls.filter(c => ['C', 'MEDIUM'].includes(c.quality_assessment?.toUpperCase() || '')).length,
+    gradeD: calls.filter(c => ['D', 'F', 'LOW'].includes(c.quality_assessment?.toUpperCase() || '')).length,
+    withDriver: calls.filter(c => c.driver === 'Yes').length,
+    withDBS: calls.filter(c => c.dbs_status && !c.dbs_status.toLowerCase().includes('no')).length,
+    immediateStart: calls.filter(c => {
+      const avail = getAvailabilityStatus(c.earliest_start_date);
+      return avail && avail.days <= 7;
+    }).length,
+  }), [calls]);
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  };
+
+  const formatFullDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString('en-GB', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const formatPhone = (phone: string) => {
+    if (!phone) return 'â€”';
+    if (phone.startsWith('+44')) {
+      return '0' + phone.slice(3, 7) + ' ' + phone.slice(7, 10) + ' ' + phone.slice(10);
+    }
+    return phone;
+  };
+
+  const formatDuration = (ms: number | null) => {
+    if (!ms) return 'â€”';
+    const mins = Math.floor(ms / 60000);
+    const secs = Math.floor((ms % 60000) / 1000);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const getGradeConfig = (grade: string | null) => {
+    const g = grade?.toUpperCase();
+    switch (g) {
+      case 'A': case 'HIGH':
+        return { letter: 'A', bg: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#fff', shadow: 'rgba(16, 185, 129, 0.3)', label: 'Excellent' };
+      case 'B':
+        return { letter: 'B', bg: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', color: '#fff', shadow: 'rgba(59, 130, 246, 0.3)', label: 'Good' };
+      case 'C': case 'MEDIUM':
+        return { letter: 'C', bg: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', color: '#fff', shadow: 'rgba(245, 158, 11, 0.3)', label: 'Average' };
+      case 'D': case 'F': case 'LOW':
+        return { letter: 'D', bg: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)', color: '#fff', shadow: 'rgba(239, 68, 68, 0.3)', label: 'Poor' };
+      default:
+        return { letter: '?', bg: 'var(--gray-200)', color: 'var(--gray-600)', shadow: 'none', label: 'Unknown' };
+    }
+  };
+
+  const getAvatarColor = (name: string) => {
+    const colors = [
+      'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+      'linear-gradient(135deg, #ec4899 0%, #f472b6 100%)',
+      'linear-gradient(135deg, #14b8a6 0%, #2dd4bf 100%)',
+      'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
+      'linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)',
+      'linear-gradient(135deg, #10b981 0%, #34d399 100%)',
+    ];
+    return colors[(name?.charCodeAt(0) || 0) % colors.length];
+  };
+
+  const styles = `
+    .cd-container {
+      min-height: 100vh;
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    }
+    
+    .cd-header {
+      background: white;
+      border-bottom: 1px solid var(--gray-200);
+      padding: 24px 32px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .cd-header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    
+    .cd-title {
+      font-family: var(--font-display);
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--gray-900);
+    }
+    
+    .cd-title-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: var(--primary-50);
+      color: var(--primary);
+      border-radius: var(--radius-full);
+      font-size: 13px;
+      font-weight: 700;
+      margin-left: 12px;
+    }
+    
+    .cd-search {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 20px;
+      background: var(--gray-50);
+      border: 2px solid var(--gray-200);
+      border-radius: var(--radius-xl);
+      width: 400px;
+      transition: all var(--transition-fast);
+    }
+    
+    .cd-search:focus-within {
+      border-color: var(--primary);
+      background: white;
+      box-shadow: 0 0 0 4px var(--primary-50);
+    }
+    
+    .cd-search-icon { font-size: 20px; color: var(--gray-400); }
+    .cd-search input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 15px;
+      background: transparent;
+    }
+    
+    .cd-stats {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    
+    .cd-stat {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 18px;
+      background: var(--gray-50);
+      border-radius: var(--radius-lg);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border: 2px solid transparent;
+    }
+    
+    .cd-stat:hover { background: var(--gray-100); }
+    .cd-stat.active { border-color: var(--primary); background: var(--primary-50); }
+    
+    .cd-stat-value {
+      font-family: var(--font-display);
+      font-size: 22px;
+      font-weight: 800;
+    }
+    
+    .cd-stat-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--gray-500);
+    }
+    
+    .cd-stat.grade-a .cd-stat-value { color: #059669; }
+    .cd-stat.grade-b .cd-stat-value { color: #2563eb; }
+    .cd-stat.grade-c .cd-stat-value { color: #d97706; }
+    .cd-stat.grade-d .cd-stat-value { color: #dc2626; }
+    
+    .cd-filters {
+      display: flex;
+      gap: 10px;
+      padding: 16px 32px;
+      background: white;
+      border-bottom: 1px solid var(--gray-100);
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    
+    .cd-filter-select {
+      padding: 10px 14px;
+      border: 1px solid var(--gray-200);
+      border-radius: var(--radius-lg);
+      font-size: 13px;
+      font-weight: 500;
+      background: white;
+      cursor: pointer;
+      min-width: 140px;
+    }
+    
+    .cd-filter-select:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    
+    .cd-filter-pills {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    
+    .cd-filter-pill {
+      padding: 8px 14px;
+      border: none;
+      border-radius: var(--radius-full);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      background: var(--gray-100);
+      color: var(--gray-600);
+    }
+    
+    .cd-filter-pill:hover { background: var(--gray-200); }
+    .cd-filter-pill.active { background: var(--primary); color: white; }
+    
+    .cd-body {
+      padding: 24px 32px;
+    }
+    
+    /* Hot Candidates Section */
+    .cd-hot {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-radius: var(--radius-2xl);
+      padding: 24px;
+      margin-bottom: 32px;
+      border: 2px solid #fbbf24;
+    }
+    
+    .cd-hot-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    
+    .cd-hot-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 800;
+      color: #92400e;
+    }
+    
+    .cd-hot-toggle {
+      padding: 6px 12px;
+      background: rgba(255,255,255,0.6);
+      border: none;
+      border-radius: var(--radius-md);
+      font-size: 12px;
+      font-weight: 600;
+      color: #92400e;
+      cursor: pointer;
+    }
+    
+    .cd-hot-grid {
+      display: flex;
+      gap: 16px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+    
+    .cd-hot-card {
+      flex: 0 0 280px;
+      background: white;
+      border-radius: var(--radius-xl);
+      padding: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      cursor: pointer;
+      transition: all var(--transition-normal);
+    }
+    
+    .cd-hot-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    }
+    
+    .cd-hot-card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    
+    .cd-hot-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 700;
+      font-size: 16px;
+    }
+    
+    .cd-hot-info { flex: 1; min-width: 0; }
+    .cd-hot-name {
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--gray-900);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cd-hot-role {
+      font-size: 12px;
+      color: var(--gray-500);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .cd-hot-grade {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 16px;
+    }
+    
+    .cd-hot-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    
+    .cd-hot-tag {
+      padding: 4px 8px;
+      border-radius: var(--radius-md);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    
+    /* Main Cards Grid */
+    .cd-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+      gap: 20px;
+    }
+    
+    .cd-card {
+      background: white;
+      border-radius: var(--radius-2xl);
+      box-shadow: var(--shadow-card);
+      overflow: hidden;
+      transition: all var(--transition-normal);
+    }
+    
+    .cd-card:hover {
+      box-shadow: var(--shadow-lg);
+    }
+    
+    .cd-card.expanded {
+      grid-column: 1 / -1;
+    }
+    
+    .cd-card-main {
+      padding: 24px;
+      cursor: pointer;
+    }
+    
+    .cd-card-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .cd-avatar {
+      width: 60px;
+      height: 60px;
+      border-radius: var(--radius-xl);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 800;
+      font-size: 22px;
+      flex-shrink: 0;
+    }
+    
+    .cd-card-title {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .cd-card-name {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--gray-900);
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .cd-card-phone {
+      font-size: 14px;
+      color: var(--gray-500);
+      font-family: var(--font-mono);
+      margin-bottom: 6px;
+    }
+    
+    .cd-card-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--gray-400);
+    }
+    
+    .cd-card-meta-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .cd-grade-large {
+      width: 56px;
+      height: 56px;
+      border-radius: var(--radius-xl);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    
+    .cd-grade-letter {
+      font-family: var(--font-display);
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    
+    .cd-grade-label {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      opacity: 0.8;
+    }
+    
+    /* Key Info Grid */
+    .cd-key-info {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .cd-key-item {
+      padding: 12px;
+      background: var(--gray-50);
+      border-radius: var(--radius-lg);
+      text-align: center;
+    }
+    
+    .cd-key-value {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--gray-900);
+      margin-bottom: 2px;
+    }
+    
+    .cd-key-label {
+      font-size: 11px;
+      color: var(--gray-500);
+      font-weight: 500;
+    }
+    
+    .cd-key-item.highlight {
+      background: #d1fae5;
+    }
+    .cd-key-item.highlight .cd-key-value { color: #059669; }
+    
+    .cd-key-item.warning {
+      background: #fee2e2;
+    }
+    .cd-key-item.warning .cd-key-value { color: #dc2626; }
+    
+    /* Summary Section */
+    .cd-summary {
+      background: linear-gradient(135deg, var(--gray-50) 0%, var(--gray-100) 100%);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    
+    .cd-summary-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--gray-500);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .cd-summary-text {
+      font-size: 14px;
+      color: var(--gray-700);
+      line-height: 1.6;
+    }
+    
+    /* Tags */
+    .cd-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    
+    .cd-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: var(--radius-full);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .cd-tag.role { background: var(--primary-50); color: var(--primary); }
+    .cd-tag.driver { background: #d1fae5; color: #059669; }
+    .cd-tag.dbs { background: #dbeafe; color: #2563eb; }
+    .cd-tag.available { background: #fef3c7; color: #92400e; }
+    .cd-tag.no { background: #fee2e2; color: #dc2626; }
+    
+    /* Energy Bar */
+    .cd-energy {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .cd-energy-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--gray-500);
+      min-width: 50px;
+    }
+    
+    .cd-energy-bar {
+      flex: 1;
+      height: 10px;
+      background: var(--gray-200);
+      border-radius: var(--radius-full);
+      overflow: hidden;
+    }
+    
+    .cd-energy-fill {
+      height: 100%;
+      border-radius: var(--radius-full);
+      transition: width 0.5s ease;
+    }
+    
+    .cd-energy-score {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 800;
+      min-width: 40px;
+      text-align: right;
+    }
+    
+    /* Expanded Content */
+    .cd-expanded {
+      border-top: 1px solid var(--gray-100);
+      padding: 24px;
+      background: var(--gray-50);
+    }
+    
+    .cd-expanded-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+    
+    .cd-expanded-section {
+      background: white;
+      border-radius: var(--radius-xl);
+      padding: 20px;
+    }
+    
+    .cd-expanded-title {
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--gray-900);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .cd-experience-text {
+      font-size: 14px;
+      color: var(--gray-600);
+      line-height: 1.7;
+    }
+    
+    .cd-follow-up-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    
+    .cd-follow-up-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--gray-100);
+      font-size: 13px;
+      color: var(--gray-700);
+    }
+    
+    .cd-follow-up-item:last-child { border-bottom: none; }
+    
+    .cd-follow-up-icon {
+      width: 24px;
+      height: 24px;
+      background: var(--primary-50);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    
+    /* Actions */
+    .cd-actions {
+      display: flex;
+      gap: 10px;
+      padding: 16px 24px;
+      border-top: 1px solid var(--gray-100);
+      background: white;
+    }
+    
+    .cd-action-btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 16px;
+      border: none;
+      border-radius: var(--radius-lg);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    
+    .cd-action-btn.call {
+      background: #d1fae5;
+      color: #059669;
+    }
+    .cd-action-btn.call:hover { background: #a7f3d0; }
+    
+    .cd-action-btn.whatsapp {
+      background: #dcfce7;
+      color: #16a34a;
+    }
+    .cd-action-btn.whatsapp:hover { background: #bbf7d0; }
+    
+    .cd-action-btn.transcript {
+      background: var(--primary);
+      color: white;
+    }
+    .cd-action-btn.transcript:hover { background: var(--primary-hover); }
+    
+    .cd-action-btn.expand {
+      background: var(--gray-100);
+      color: var(--gray-700);
+    }
+    .cd-action-btn.expand:hover { background: var(--gray-200); }
+    
+    /* Empty State */
+    .cd-empty {
+      text-align: center;
+      padding: 80px 40px;
+      background: white;
+      border-radius: var(--radius-2xl);
+    }
+    
+    .cd-empty-icon { font-size: 64px; margin-bottom: 16px; opacity: 0.4; }
+    .cd-empty-title {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--gray-900);
+      margin-bottom: 8px;
+    }
+    .cd-empty-text { font-size: 14px; color: var(--gray-500); }
+    
+    /* Loading */
+    .cd-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 80px;
+    }
+    
+    .cd-loading-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid var(--gray-200);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: cdSpin 0.8s linear infinite;
+    }
+    
+    @keyframes cdSpin { to { transform: rotate(360deg); } }
+    
+    /* Transcript Modal */
+    .cd-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.7);
+      backdrop-filter: blur(4px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 20px;
+    }
+    
+    .cd-modal {
+      background: white;
+      border-radius: var(--radius-2xl);
+      width: 100%;
+      max-width: 800px;
+      max-height: 85vh;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    }
+    
+    .cd-modal-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--gray-100);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .cd-modal-title {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+    }
+    
+    .cd-modal-close {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      background: var(--gray-100);
+      border-radius: var(--radius-lg);
+      cursor: pointer;
+      font-size: 20px;
+      color: var(--gray-500);
+    }
+    
+    .cd-modal-body {
+      padding: 24px;
+      max-height: calc(85vh - 140px);
+      overflow-y: auto;
+    }
+    
+    .cd-transcript-text {
+      font-size: 15px;
+      line-height: 2;
+      color: var(--gray-700);
+      white-space: pre-wrap;
+    }
+    
+    .cd-results-count {
+      font-size: 13px;
+      color: var(--gray-500);
+      margin-bottom: 16px;
+    }
+  `;
+
+  if (loading) {
+    return (
+      <div className="cd-container">
+        <style>{styles}</style>
+        <div className="cd-loading">
+          <div className="cd-loading-spinner" />
+          <p style={{ marginTop: 16, color: 'var(--gray-500)' }}>Loading candidates...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="cd-container">
+      <style>{styles}</style>
+      
+      {/* Header */}
+      <div className="cd-header">
+        <div className="cd-header-top">
+          <div>
+            <h1 className="cd-title">
+              Candidate Dashboard
+              <span className="cd-title-badge">ðŸ¤– AI-Powered</span>
+            </h1>
+          </div>
+          <div className="cd-search">
+            <span className="cd-search-icon">ðŸ”</span>
+            <input
+              type="text"
+              placeholder="Search by name, phone, role, or keywords..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery('')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16 }}
+              >
+                âœ•
+              </button>
+            )}
+          </div>
+        </div>
+        
+        <div className="cd-stats">
+          <div 
+            className={`cd-stat ${gradeFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setGradeFilter('all')}
+          >
+            <div className="cd-stat-value">{stats.total}</div>
+            <div className="cd-stat-label">Total</div>
+          </div>
+          <div 
+            className={`cd-stat grade-a ${gradeFilter === 'A' ? 'active' : ''}`}
+            onClick={() => setGradeFilter('A')}
+          >
+            <div className="cd-stat-value">{stats.gradeA}</div>
+            <div className="cd-stat-label">Grade A</div>
+          </div>
+          <div 
+            className={`cd-stat grade-b ${gradeFilter === 'B' ? 'active' : ''}`}
+            onClick={() => setGradeFilter('B')}
+          >
+            <div className="cd-stat-value">{stats.gradeB}</div>
+            <div className="cd-stat-label">Grade B</div>
+          </div>
+          <div 
+            className={`cd-stat grade-c ${gradeFilter === 'C' ? 'active' : ''}`}
+            onClick={() => setGradeFilter('C')}
+          >
+            <div className="cd-stat-value">{stats.gradeC}</div>
+            <div className="cd-stat-label">Grade C</div>
+          </div>
+          <div 
+            className={`cd-stat grade-d ${gradeFilter === 'D' ? 'active' : ''}`}
+            onClick={() => setGradeFilter('D')}
+          >
+            <div className="cd-stat-value">{stats.gradeD}</div>
+            <div className="cd-stat-label">Grade D</div>
+          </div>
+          <div style={{ width: 1, background: 'var(--gray-200)', margin: '0 8px' }} />
+          <div 
+            className={`cd-stat ${complianceFilter === 'driver' ? 'active' : ''}`}
+            onClick={() => setComplianceFilter(complianceFilter === 'driver' ? 'all' : 'driver')}
+          >
+            <div className="cd-stat-value">ðŸš— {stats.withDriver}</div>
+            <div className="cd-stat-label">Drivers</div>
+          </div>
+          <div 
+            className={`cd-stat ${availabilityFilter === 'week' ? 'active' : ''}`}
+            onClick={() => setAvailabilityFilter(availabilityFilter === 'week' ? 'all' : 'week')}
+          >
+            <div className="cd-stat-value">âš¡ {stats.immediateStart}</div>
+            <div className="cd-stat-label">Start Soon</div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Filters */}
+      <div className="cd-filters">
+        <select 
+          className="cd-filter-select"
+          value={roleFilter}
+          onChange={e => setRoleFilter(e.target.value)}
+        >
+          <option value="all">All Roles</option>
+          {allRoles.map(role => (
+            <option key={role} value={role}>{role}</option>
+          ))}
+        </select>
+        
+        <select 
+          className="cd-filter-select"
+          value={availabilityFilter}
+          onChange={e => setAvailabilityFilter(e.target.value as AvailabilityFilter)}
+        >
+          <option value="all">Any Availability</option>
+          <option value="immediate">ðŸŸ¢ Immediate</option>
+          <option value="week">âš¡ Within 1 Week</option>
+          <option value="month">ðŸ“… Within 1 Month</option>
+        </select>
+        
+        <select 
+          className="cd-filter-select"
+          value={complianceFilter}
+          onChange={e => setComplianceFilter(e.target.value as 'all' | 'driver' | 'dbs')}
+        >
+          <option value="all">Any Compliance</option>
+          <option value="driver">ðŸš— Drivers Only</option>
+          <option value="dbs">ðŸ”’ DBS Checked</option>
+        </select>
+        
+        {(gradeFilter !== 'all' || availabilityFilter !== 'all' || roleFilter !== 'all' || complianceFilter !== 'all' || searchQuery) && (
+          <button
+            className="cd-filter-pill"
+            onClick={() => {
+              setGradeFilter('all');
+              setAvailabilityFilter('all');
+              setRoleFilter('all');
+              setComplianceFilter('all');
+              setSearchQuery('');
+            }}
+          >
+            âœ• Clear Filters
+          </button>
+        )}
+        
+        <div className="cd-filter-pills">
+          <span style={{ fontSize: 12, color: 'var(--gray-500)', marginRight: 8 }}>
+            {filteredCalls.length} of {calls.length} candidates
+          </span>
+        </div>
+      </div>
+      
+      <div className="cd-body">
+        {/* Hot Candidates */}
+        {hotCandidates.length > 0 && showHotCandidates && gradeFilter === 'all' && !searchQuery && (
+          <div className="cd-hot">
+            <div className="cd-hot-header">
+              <div className="cd-hot-title">
+                <span>ðŸ”¥</span> Hot Candidates
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#b45309' }}>
+                  â€” Grade A/B, available within 2 weeks
+                </span>
+              </div>
+              <button className="cd-hot-toggle" onClick={() => setShowHotCandidates(false)}>
+                Hide
+              </button>
+            </div>
+            <div className="cd-hot-grid">
+              {hotCandidates.map(call => {
+                const gradeConfig = getGradeConfig(call.quality_assessment);
+                const avail = getAvailabilityStatus(call.earliest_start_date);
+                return (
+                  <div 
+                    key={call.id} 
+                    className="cd-hot-card"
+                    onClick={() => setExpandedId(expandedId === call.id ? null : call.id)}
+                  >
+                    <div className="cd-hot-card-header">
+                      <div className="cd-hot-avatar" style={{ background: getAvatarColor(call.candidate_name || '') }}>
+                        {(call.candidate_name || '?')[0].toUpperCase()}
+                      </div>
+                      <div className="cd-hot-info">
+                        <div className="cd-hot-name">{call.candidate_name}</div>
+                        <div className="cd-hot-role">{call.roles?.[0] || 'Care Role'}</div>
+                      </div>
+                      <div 
+                        className="cd-hot-grade"
+                        style={{ background: gradeConfig.bg, color: gradeConfig.color }}
+                      >
+                        {gradeConfig.letter}
+                      </div>
+                    </div>
+                    <div className="cd-hot-tags">
+                      {avail && (
+                        <span className="cd-hot-tag" style={{ background: avail.bg, color: avail.color }}>
+                          ðŸ“… {avail.label}
+                        </span>
+                      )}
+                      {call.driver === 'Yes' && (
+                        <span className="cd-hot-tag" style={{ background: '#d1fae5', color: '#059669' }}>
+                          ðŸš— Driver
+                        </span>
+                      )}
+                      {call.energy_score && call.energy_score >= 7 && (
+                        <span className="cd-hot-tag" style={{ background: '#dbeafe', color: '#2563eb' }}>
+                          âš¡ {call.energy_score}/10
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        
+        {/* Results */}
+        {filteredCalls.length === 0 ? (
+          <div className="cd-empty">
+            <div className="cd-empty-icon">ðŸ“ž</div>
+            <div className="cd-empty-title">No candidates found</div>
+            <div className="cd-empty-text">
+              {searchQuery 
+                ? `No results for "${searchQuery}". Try a different search.`
+                : 'Try adjusting your filters or make some calls to populate this dashboard.'
+              }
+            </div>
+          </div>
+        ) : (
+          <div className="cd-grid">
+            {filteredCalls.map(call => {
+              const gradeConfig = getGradeConfig(call.quality_assessment);
+              const avail = getAvailabilityStatus(call.earliest_start_date);
+              const energyPct = call.energy_score ? (call.energy_score / 10) * 100 : 0;
+              const energyColor = call.energy_score 
+                ? call.energy_score >= 7 ? '#059669' : call.energy_score >= 5 ? '#2563eb' : call.energy_score >= 3 ? '#d97706' : '#dc2626'
+                : '#9ca3af';
+              const isExpanded = expandedId === call.id;
+              
+              return (
+                <div key={call.id} className={`cd-card ${isExpanded ? 'expanded' : ''}`}>
+                  <div className="cd-card-main" onClick={() => setExpandedId(isExpanded ? null : call.id)}>
+                    <div className="cd-card-header">
+                      <div className="cd-avatar" style={{ background: getAvatarColor(call.candidate_name || '') }}>
+                        {(call.candidate_name || '?')[0].toUpperCase()}
+                      </div>
+                      <div className="cd-card-title">
+                        <div className="cd-card-name">
+                          {call.candidate_name}
+                          {avail && avail.days <= 7 && (
+                            <span style={{ 
+                              fontSize: 11, 
+                              padding: '2px 8px', 
+                              background: avail.bg, 
+                              color: avail.color,
+                              borderRadius: 'var(--radius-full)',
+                              fontWeight: 600
+                            }}>
+                              âš¡ {avail.label}
+                            </span>
+                          )}
+                        </div>
+                        <div className="cd-card-phone">{formatPhone(call.phone_e164)}</div>
+                        <div className="cd-card-meta">
+                          <span className="cd-card-meta-item">ðŸ“ž {formatDate(call.call_time)}</span>
+                          <span className="cd-card-meta-item">â±ï¸ {formatDuration(call.duration_ms)}</span>
+                          {call.direction && (
+                            <span className="cd-card-meta-item">
+                              {call.direction === 'inbound' ? 'ðŸ“¥' : 'ðŸ“¤'} {call.direction}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div 
+                        className="cd-grade-large"
+                        style={{ 
+                          background: gradeConfig.bg, 
+                          color: gradeConfig.color,
+                          boxShadow: `0 4px 12px ${gradeConfig.shadow}`
+                        }}
+                      >
+                        <span className="cd-grade-letter">{gradeConfig.letter}</span>
+                        <span className="cd-grade-label">{gradeConfig.label}</span>
+                      </div>
+                    </div>
+                    
+                    {/* Key Info */}
+                    <div className="cd-key-info">
+                      <div className={`cd-key-item ${call.driver === 'Yes' ? 'highlight' : call.driver === 'No' ? 'warning' : ''}`}>
+                        <div className="cd-key-value">{call.driver === 'Yes' ? 'âœ“' : call.driver === 'No' ? 'âœ—' : '?'}</div>
+                        <div className="cd-key-label">ðŸš— Driver</div>
+                      </div>
+                      <div className={`cd-key-item ${call.dbs_status && !call.dbs_status.toLowerCase().includes('no') ? 'highlight' : ''}`}>
+                        <div className="cd-key-value">{call.dbs_status ? (call.dbs_status.toLowerCase().includes('no') ? 'âœ—' : 'âœ“') : '?'}</div>
+                        <div className="cd-key-label">ðŸ”’ DBS</div>
+                      </div>
+                      <div className="cd-key-item">
+                        <div className="cd-key-value">{avail ? avail.label : '?'}</div>
+                        <div className="cd-key-label">ðŸ“… Start</div>
+                      </div>
+                    </div>
+                    
+                    {/* Summary */}
+                    {call.call_summary && (
+                      <div className="cd-summary">
+                        <div className="cd-summary-title">
+                          <span>ðŸ’¬</span> Call Summary
+                        </div>
+                        <div className="cd-summary-text">{call.call_summary}</div>
+                      </div>
+                    )}
+                    
+                    {/* Tags */}
+                    <div className="cd-tags">
+                      {call.roles?.slice(0, 3).map((role, i) => (
+                        <span key={i} className="cd-tag role">{role}</span>
+                      ))}
+                      {call.weekly_rota && (
+                        <span className="cd-tag available">ðŸ• {call.weekly_rota}</span>
+                      )}
+                    </div>
+                    
+                    {/* Energy */}
+                    <div className="cd-energy">
+                      <span className="cd-energy-label">Energy</span>
+                      <div className="cd-energy-bar">
+                        <div 
+                          className="cd-energy-fill"
+                          style={{ 
+                            width: `${energyPct}%`,
+                            background: `linear-gradient(90deg, ${energyColor} 0%, ${energyColor}88 100%)`
+                          }}
+                        />
+                      </div>
+                      <span className="cd-energy-score" style={{ color: energyColor }}>
+                        {call.energy_score || 'â€”'}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  {/* Expanded Content */}
+                  {isExpanded && (
+                    <div className="cd-expanded">
+                      <div className="cd-expanded-grid">
+                        {/* Experience */}
+                        <div className="cd-expanded-section">
+                          <div className="cd-expanded-title">
+                            <span>ðŸ“‹</span> Experience & Background
+                          </div>
+                          <div className="cd-experience-text">
+                            {call.experience_summary || 'No experience summary extracted from this call.'}
+                          </div>
+                        </div>
+                        
+                        {/* Follow-up Actions */}
+                        <div className="cd-expanded-section">
+                          <div className="cd-expanded-title">
+                            <span>âœ…</span> Follow-up Actions
+                          </div>
+                          {call.follow_up_questions && call.follow_up_questions.length > 0 ? (
+                            <ul className="cd-follow-up-list">
+                              {call.follow_up_questions.map((item, i) => (
+                                <li key={i} className="cd-follow-up-item">
+                                  <span className="cd-follow-up-icon">ðŸ“Œ</span>
+                                  <span>{item}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p style={{ fontSize: 13, color: 'var(--gray-500)' }}>
+                              No specific follow-up actions identified.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Full Details */}
+                      <div className="cd-expanded-section" style={{ marginTop: 16 }}>
+                        <div className="cd-expanded-title">
+                          <span>ðŸ“Š</span> Full Details
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+                          <div>
+                            <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 4 }}>Call Type</div>
+                            <div style={{ fontSize: 14, fontWeight: 600 }}>{call.call_type || 'Screening'}</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 4 }}>Full Call Time</div>
+                            <div style={{ fontSize: 14, fontWeight: 600 }}>{formatFullDate(call.call_time)}</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 4 }}>Hours/Rota</div>
+                            <div style={{ fontSize: 14, fontWeight: 600 }}>{call.weekly_rota || 'Not discussed'}</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 4 }}>Start Date</div>
+                            <div style={{ fontSize: 14, fontWeight: 600 }}>
+                              {call.earliest_start_date 
+                                ? new Date(call.earliest_start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                                : 'Not discussed'
+                              }
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Actions */}
+                  <div className="cd-actions">
+                    <button 
+                      className="cd-action-btn call"
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        window.location.href = `tel:${call.phone_e164}`; 
+                      }}
+                    >
+                      ðŸ“ž Call
+                    </button>
+                    <button 
+                      className="cd-action-btn whatsapp"
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        window.open(`https://wa.me/${call.phone_e164?.replace(/\D/g, '')}`, '_blank'); 
+                      }}
+                    >
+                      ðŸ’¬ WhatsApp
+                    </button>
+                    {call.transcript && (
+                      <button 
+                        className="cd-action-btn transcript"
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          setShowTranscript(call.id); 
+                        }}
+                      >
+                        ðŸ“ Transcript
+                      </button>
+                    )}
+                    <button 
+                      className="cd-action-btn expand"
+                      onClick={(e) => { 
+                        e.stopPropagation(); 
+                        setExpandedId(isExpanded ? null : call.id); 
+                      }}
+                    >
+                      {isExpanded ? 'â–² Less' : 'â–¼ More'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      
+      {/* Transcript Modal */}
+      {showTranscript && (
+        <div className="cd-modal-overlay" onClick={() => setShowTranscript(null)}>
+          <div className="cd-modal" onClick={e => e.stopPropagation()}>
+            <div className="cd-modal-header">
+              <span className="cd-modal-title">
+                ðŸ“ Full Transcript â€” {calls.find(c => c.id === showTranscript)?.candidate_name}
+              </span>
+              <button className="cd-modal-close" onClick={() => setShowTranscript(null)}>Ã—</button>
+            </div>
+            <div className="cd-modal-body">
+              <div className="cd-transcript-text">
+                {calls.find(c => c.id === showTranscript)?.transcript || 'No transcript available.'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+===== src\app\CalledCandidatesView.tsx =====
+
+'use client';
+import React, { useEffect, useState } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+interface CallHistoryRecord {
+  id: string;
+  candidate_id: string | null;
+  phone_e164: string;
+  call_id: string;
+  call_time: string;
+  direction: string;
+  duration_ms: number | null;
+  candidate_name: string | null;
+  experience_summary: string | null;
+  call_summary: string | null;
+  roles: string[];
+  driver: string | null;
+  dbs_status: string | null;
+  mandatory_training: string | null;
+  earliest_start_date: string | null;
+  weekly_rota: string | null;
+  energy_score: number | null;
+  quality_assessment: string | null;
+  follow_up_questions: string[];
+  call_type: string | null;
+  extraction_confidence: number | null;
+  transcript: string | null;
+  created_at: string;
+}
+
+interface CalledCandidatesViewProps {
+  onSelectCandidate?: (candidate: any) => void;
+}
+
+export default function CalledCandidatesView({ onSelectCandidate }: CalledCandidatesViewProps) {
+  const [calls, setCalls] = useState<CallHistoryRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedCall, setExpandedCall] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'all' | 'A' | 'B' | 'C' | 'D'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [editingCall, setEditingCall] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<any>({});
+  const [activeTab, setActiveTab] = useState<'graded' | 'unprocessed'>('graded');
+
+  useEffect(() => {
+    fetchCallHistory();
+  }, []);
+
+  async function fetchCallHistory() {
+    setLoading(true);
+    const { data: callData, error: callError } = await supabase
+      .from('call_history')
+      .select('*')
+      .order('call_time', { ascending: false })
+      .limit(500);
+
+    if (callError) {
+      console.error('Error fetching call history:', callError);
+      setLoading(false);
+      return;
+    }
+
+    setCalls(callData || []);
+    setLoading(false);
+  }
+
+  async function deleteCall(callId: string) {
+    setDeleting(callId);
+    
+    const { error } = await supabase
+      .from('call_history')
+      .delete()
+      .eq('id', callId);
+
+    if (error) {
+      console.error('Error deleting call:', error);
+      alert('Failed to delete call: ' + error.message);
+    } else {
+      setCalls(calls.filter(c => c.id !== callId));
+    }
+    
+    setDeleting(null);
+    setDeleteConfirm(null);
+  }
+
+  async function deleteAllFiltered() {
+    const filteredCalls = getFilteredCalls();
+    if (filteredCalls.length === 0) return;
+    
+    const confirmed = window.confirm(`Are you sure you want to delete ${filteredCalls.length} call records? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setLoading(true);
+    const ids = filteredCalls.map(c => c.id);
+    
+    const { error } = await supabase
+      .from('call_history')
+      .delete()
+      .in('id', ids);
+
+    if (error) {
+      console.error('Error deleting calls:', error);
+      alert('Failed to delete calls: ' + error.message);
+    } else {
+      setCalls(calls.filter(c => !ids.includes(c.id)));
+    }
+    
+    setLoading(false);
+  }
+
+  async function updateCall(callId: string, updates: Partial<CallHistoryRecord>) {
+    const { error } = await supabase
+      .from('call_history')
+      .update(updates)
+      .eq('id', callId);
+
+    if (error) {
+      console.error('Error updating call:', error);
+      alert('Failed to update: ' + error.message);
+    } else {
+      setCalls(calls.map(c => c.id === callId ? { ...c, ...updates } : c));
+      setEditingCall(null);
+      setEditForm({});
+    }
+  }
+
+  const isUnprocessed = (call: CallHistoryRecord) => {
+    return !call.candidate_name || 
+           call.candidate_name === 'Unknown' || 
+           call.candidate_name === 'Unknown Candidate' ||
+           call.candidate_name?.toLowerCase().includes('unknown');
+  };
+
+  const gradedCalls = calls.filter(c => !isUnprocessed(c));
+  const unprocessedCalls = calls.filter(c => isUnprocessed(c));
+
+  const getQualityColor = (quality: string | null) => {
+    const q = quality?.toUpperCase();
+    switch (q) {
+      case 'A': return { bg: '#dcfce7', text: '#166534', border: '#86efac' };
+      case 'B': return { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' };
+      case 'C': return { bg: '#fef9c3', text: '#854d0e', border: '#fde047' };
+      case 'D': case 'F': return { bg: '#fee2e2', text: '#991b1b', border: '#fca5a5' };
+      case 'HIGH': return { bg: '#dcfce7', text: '#166534', border: '#86efac' };
+      case 'MEDIUM': return { bg: '#fef9c3', text: '#854d0e', border: '#fde047' };
+      case 'LOW': return { bg: '#fee2e2', text: '#991b1b', border: '#fca5a5' };
+      default: return { bg: '#f3f4f6', text: '#374151', border: '#d1d5db' };
+    }
+  };
+
+  const getEnergyColor = (score: number | null) => {
+    if (!score) return '#9ca3af';
+    if (score >= 8) return '#22c55e';
+    if (score >= 6) return '#3b82f6';
+    if (score >= 4) return '#eab308';
+    return '#ef4444';
+  };
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const formatPhone = (phone: string) => {
+    if (!phone) return '';
+    if (phone.startsWith('+44')) {
+      return phone.replace('+44', '0').replace(/(\d{5})(\d{6})/, '$1 $2');
+    }
+    return phone;
+  };
+
+  const getFilteredCalls = () => {
+    const baseCalls = activeTab === 'graded' ? gradedCalls : unprocessedCalls;
+    
+    return baseCalls.filter(call => {
+      // Quality filter (only for graded tab)
+      if (activeTab === 'graded' && filter !== 'all') {
+        const quality = call.quality_assessment?.toUpperCase();
+        if (quality !== filter) return false;
+      }
+
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesName = call.candidate_name?.toLowerCase().includes(query);
+        const matchesPhone = call.phone_e164?.includes(query);
+        const matchesSummary = call.call_summary?.toLowerCase().includes(query);
+        if (!matchesName && !matchesPhone && !matchesSummary) return false;
+      }
+
+      return true;
+    });
+  };
+
+  const filteredCalls = getFilteredCalls();
+
+  const stats = {
+    total: gradedCalls.length,
+    gradeA: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'A' || c.quality_assessment?.toUpperCase() === 'HIGH').length,
+    gradeB: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'B').length,
+    gradeC: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'C' || c.quality_assessment?.toUpperCase() === 'MEDIUM').length,
+    gradeD: gradedCalls.filter(c => c.quality_assessment?.toUpperCase() === 'D' || c.quality_assessment?.toUpperCase() === 'F' || c.quality_assessment?.toUpperCase() === 'LOW').length,
+    unprocessed: unprocessedCalls.length
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: '40px', textAlign: 'center' }}>
+        <div style={{ fontSize: '24px', marginBottom: '10px' }}>ðŸ“ž</div>
+        <div style={{ color: '#6b7280' }}>Loading call history...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '20px' }}>
+      {/* Stats Bar */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '16px', 
+        marginBottom: '20px',
+        flexWrap: 'wrap'
+      }}>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: 'white', 
+          borderRadius: '12px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+          minWidth: '120px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#1f2937' }}>{stats.total}</div>
+          <div style={{ fontSize: '13px', color: '#6b7280' }}>Graded Calls</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#dcfce7', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#166534' }}>{stats.gradeA}</div>
+          <div style={{ fontSize: '13px', color: '#166534' }}>Grade A</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#dbeafe', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#1e40af' }}>{stats.gradeB}</div>
+          <div style={{ fontSize: '13px', color: '#1e40af' }}>Grade B</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#fef9c3', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#854d0e' }}>{stats.gradeC}</div>
+          <div style={{ fontSize: '13px', color: '#854d0e' }}>Grade C</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: '#fee2e2', 
+          borderRadius: '12px',
+          minWidth: '100px'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#991b1b' }}>{stats.gradeD}</div>
+          <div style={{ fontSize: '13px', color: '#991b1b' }}>Grade D/F</div>
+        </div>
+        <div style={{ 
+          padding: '16px 24px', 
+          background: stats.unprocessed > 0 ? '#fef3c7' : '#f3f4f6', 
+          borderRadius: '12px',
+          minWidth: '100px',
+          border: stats.unprocessed > 0 ? '2px solid #f59e0b' : 'none'
+        }}>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: stats.unprocessed > 0 ? '#d97706' : '#6b7280' }}>
+            {stats.unprocessed}
+          </div>
+          <div style={{ fontSize: '13px', color: stats.unprocessed > 0 ? '#d97706' : '#6b7280' }}>Unprocessed</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '4px', 
+        marginBottom: '20px',
+        background: '#f3f4f6',
+        padding: '4px',
+        borderRadius: '12px',
+        width: 'fit-content'
+      }}>
+        <button
+          onClick={() => { setActiveTab('graded'); setFilter('all'); }}
+          style={{
+            padding: '10px 20px',
+            borderRadius: '8px',
+            border: 'none',
+            background: activeTab === 'graded' ? 'white' : 'transparent',
+            color: activeTab === 'graded' ? '#1f2937' : '#6b7280',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'graded' ? '600' : '400',
+            boxShadow: activeTab === 'graded' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}
+        >
+          âœ… Graded
+          <span style={{
+            background: '#e5e7eb',
+            padding: '2px 8px',
+            borderRadius: '12px',
+            fontSize: '12px'
+          }}>
+            {stats.total}
+          </span>
+        </button>
+        <button
+          onClick={() => { setActiveTab('unprocessed'); setFilter('all'); }}
+          style={{
+            padding: '10px 20px',
+            borderRadius: '8px',
+            border: 'none',
+            background: activeTab === 'unprocessed' ? 'white' : 'transparent',
+            color: activeTab === 'unprocessed' ? '#d97706' : '#6b7280',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'unprocessed' ? '600' : '400',
+            boxShadow: activeTab === 'unprocessed' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}
+        >
+          â³ Unprocessed
+          {stats.unprocessed > 0 && (
+            <span style={{
+              background: '#fef3c7',
+              color: '#d97706',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              fontSize: '12px',
+              fontWeight: '600'
+            }}>
+              {stats.unprocessed}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Filters and Search */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '12px', 
+        marginBottom: '20px',
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }}>
+        {activeTab === 'graded' && (
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {(['all', 'A', 'B', 'C', 'D'] as const).map(grade => (
+              <button
+                key={grade}
+                onClick={() => setFilter(grade)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: filter === grade ? '#3b82f6' : '#f3f4f6',
+                  color: filter === grade ? 'white' : '#374151',
+                  cursor: 'pointer',
+                  fontWeight: filter === grade ? '600' : '400',
+                  transition: 'all 0.2s'
+                }}
+              >
+                {grade === 'all' ? 'All' : `Grade ${grade}`}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <input
+          type="text"
+          placeholder="Search by name, phone, or summary..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: '1px solid #d1d5db',
+            width: '300px',
+            outline: 'none'
+          }}
+        />
+
+        <button
+          onClick={fetchCallHistory}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: 'none',
+            background: '#f3f4f6',
+            color: '#374151',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          ðŸ”„ Refresh
+        </button>
+
+        {filteredCalls.length > 0 && (
+          <button
+            onClick={deleteAllFiltered}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              border: 'none',
+              background: '#fee2e2',
+              color: '#991b1b',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              marginLeft: 'auto'
+            }}
+          >
+            ðŸ—‘ï¸ Delete {activeTab === 'unprocessed' ? 'All Unprocessed' : (filter !== 'all' || searchQuery ? `${filteredCalls.length} Filtered` : 'All')}
+          </button>
+        )}
+      </div>
+
+      {/* Results count */}
+      <div style={{ marginBottom: '16px', color: '#6b7280', fontSize: '14px' }}>
+        Showing {filteredCalls.length} {activeTab === 'graded' ? 'graded' : 'unprocessed'} calls
+      </div>
+
+      {/* Call List */}
+      {filteredCalls.length === 0 ? (
+        <div style={{ 
+          padding: '60px', 
+          textAlign: 'center',
+          background: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>
+            {activeTab === 'graded' ? 'ðŸ“ž' : 'ðŸŽ‰'}
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+            {activeTab === 'graded' 
+              ? 'No graded calls found'
+              : 'No unprocessed calls!'}
+          </div>
+          <div style={{ color: '#6b7280' }}>
+            {activeTab === 'graded'
+              ? (searchQuery || filter !== 'all' ? 'Try adjusting your filters' : 'Call recordings will appear here after being processed')
+              : 'All calls have been reviewed and graded'}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {filteredCalls.map(call => {
+            const qualityColors = getQualityColor(call.quality_assessment);
+            const isExpanded = expandedCall === call.id;
+            const isDeleting = deleting === call.id;
+            const showDeleteConfirm = deleteConfirm === call.id;
+            const isEditing = editingCall === call.id;
+
+            return (
+              <div
+                key={call.id}
+                style={{
+                  background: 'white',
+                  borderRadius: '12px',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                  overflow: 'hidden',
+                  opacity: isDeleting ? 0.5 : 1,
+                  transition: 'opacity 0.2s',
+                  borderLeft: activeTab === 'unprocessed' ? '4px solid #f59e0b' : 'none'
+                }}
+              >
+                {/* Call Header */}
+                <div
+                  onClick={() => !showDeleteConfirm && !isEditing && setExpandedCall(isExpanded ? null : call.id)}
+                  style={{
+                    padding: '16px 20px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '16px',
+                    borderBottom: isExpanded ? '1px solid #e5e7eb' : 'none'
+                  }}
+                >
+                  {/* Quality Badge */}
+                  <div style={{
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: qualityColors.bg,
+                    color: qualityColors.text,
+                    fontWeight: '700',
+                    fontSize: '14px',
+                    minWidth: '45px',
+                    textAlign: 'center'
+                  }}>
+                    {call.quality_assessment?.toUpperCase() || '-'}
+                  </div>
+
+                  {/* Name & Phone */}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: '600', color: '#1f2937', fontSize: '15px' }}>
+                      {call.candidate_name || 'Unknown Candidate'}
+                    </div>
+                    <div style={{ color: '#6b7280', fontSize: '13px' }}>
+                      {formatPhone(call.phone_e164)} â€¢ {formatDate(call.call_time)}
+                    </div>
+                  </div>
+
+                  {/* Energy Score */}
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ 
+                      fontSize: '20px', 
+                      fontWeight: '700',
+                      color: getEnergyColor(call.energy_score)
+                    }}>
+                      {call.energy_score || '-'}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#9ca3af' }}>Energy</div>
+                  </div>
+
+                  {/* Roles */}
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: '6px',
+                    flexWrap: 'wrap',
+                    maxWidth: '200px'
+                  }}>
+                    {(call.roles || []).slice(0, 2).map((role, i) => (
+                      <span key={i} style={{
+                        padding: '4px 8px',
+                        background: '#f3f4f6',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        color: '#4b5563'
+                      }}>
+                        {role}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Edit Button (for unprocessed) */}
+                  {activeTab === 'unprocessed' && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingCall(call.id);
+                        setEditForm({
+                          candidate_name: call.candidate_name || '',
+                          quality_assessment: call.quality_assessment || 'C',
+                          energy_score: call.energy_score || 5,
+                          call_summary: call.call_summary || ''
+                        });
+                      }}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: '#3b82f6',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      âœï¸ Grade
+                    </button>
+                  )}
+
+                  {/* Delete Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteConfirm(showDeleteConfirm ? null : call.id);
+                    }}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      background: showDeleteConfirm ? '#fee2e2' : '#f3f4f6',
+                      color: showDeleteConfirm ? '#991b1b' : '#6b7280',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    ðŸ—‘ï¸
+                  </button>
+
+                  {/* Expand Arrow */}
+                  <div style={{ 
+                    color: '#9ca3af',
+                    transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s'
+                  }}>
+                    â–¼
+                  </div>
+                </div>
+
+                {/* Edit Form */}
+                {isEditing && (
+                  <div style={{
+                    padding: '20px',
+                    background: '#f9fafb',
+                    borderBottom: '1px solid #e5e7eb'
+                  }}>
+                    <h4 style={{ marginBottom: '16px', color: '#1f2937' }}>Grade this call</h4>
+                    
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                          Candidate Name
+                        </label>
+                        <input
+                          type="text"
+                          value={editForm.candidate_name}
+                          onChange={(e) => setEditForm({ ...editForm, candidate_name: e.target.value })}
+                          placeholder="Enter candidate name"
+                          style={{
+                            width: '100%',
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid #d1d5db',
+                            fontSize: '14px'
+                          }}
+                        />
+                      </div>
+                      
+                      <div>
+                        <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                          Quality Grade
+                        </label>
+                        <select
+                          value={editForm.quality_assessment}
+                          onChange={(e) => setEditForm({ ...editForm, quality_assessment: e.target.value })}
+                          style={{
+                            width: '100%',
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid #d1d5db',
+                            fontSize: '14px'
+                          }}
+                        >
+                          <option value="A">A - Excellent (Ready to place)</option>
+                          <option value="B">B - Good (Proceed)</option>
+                          <option value="C">C - Average (With reservations)</option>
+                          <option value="D">D - Below standard</option>
+                          <option value="F">F - Not suitable</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                          Energy Score (1-10)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={editForm.energy_score}
+                          onChange={(e) => setEditForm({ ...editForm, energy_score: parseInt(e.target.value) || 5 })}
+                          style={{
+                            width: '100%',
+                            padding: '10px 12px',
+                            borderRadius: '8px',
+                            border: '1px solid #d1d5db',
+                            fontSize: '14px'
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{ display: 'block', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                        Call Summary
+                      </label>
+                      <textarea
+                        value={editForm.call_summary}
+                        onChange={(e) => setEditForm({ ...editForm, call_summary: e.target.value })}
+                        placeholder="Brief summary of the call..."
+                        rows={3}
+                        style={{
+                          width: '100%',
+                          padding: '10px 12px',
+                          borderRadius: '8px',
+                          border: '1px solid #d1d5db',
+                          fontSize: '14px',
+                          resize: 'vertical'
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => updateCall(call.id, editForm)}
+                        style={{
+                          padding: '10px 20px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          background: '#22c55e',
+                          color: 'white',
+                          cursor: 'pointer',
+                          fontWeight: '500'
+                        }}
+                      >
+                        âœ“ Save & Grade
+                      </button>
+                      <button
+                        onClick={() => { setEditingCall(null); setEditForm({}); }}
+                        style={{
+                          padding: '10px 20px',
+                          borderRadius: '8px',
+                          border: '1px solid #d1d5db',
+                          background: 'white',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Delete Confirmation */}
+                {showDeleteConfirm && (
+                  <div style={{
+                    padding: '12px 20px',
+                    background: '#fef2f2',
+                    borderBottom: '1px solid #fecaca',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px'
+                  }}>
+                    <span style={{ color: '#991b1b', fontSize: '14px' }}>
+                      Delete this call record?
+                    </span>
+                    <button
+                      onClick={() => deleteCall(call.id)}
+                      disabled={isDeleting}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: '#dc2626',
+                        color: 'white',
+                        cursor: isDeleting ? 'not-allowed' : 'pointer',
+                        fontSize: '13px',
+                        fontWeight: '500'
+                      }}
+                    >
+                      {isDeleting ? 'Deleting...' : 'Yes, Delete'}
+                    </button>
+                    <button
+                      onClick={() => setDeleteConfirm(null)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #d1d5db',
+                        background: 'white',
+                        color: '#374151',
+                        cursor: 'pointer',
+                        fontSize: '13px'
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
+                {/* Summary Preview */}
+                {!isExpanded && !isEditing && call.call_summary && (
+                  <div style={{ 
+                    padding: '0 20px 16px 20px',
+                    color: '#6b7280',
+                    fontSize: '13px',
+                    lineHeight: '1.5'
+                  }}>
+                    {call.call_summary.substring(0, 150)}
+                    {call.call_summary.length > 150 ? '...' : ''}
+                  </div>
+                )}
+
+                {/* Expanded Content */}
+                {isExpanded && !isEditing && (
+                  <div style={{ padding: '20px' }}>
+                    {/* Summary */}
+                    {call.call_summary && (
+                      <div style={{ marginBottom: '20px' }}>
+                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                          ðŸ“ Call Summary
+                        </div>
+                        <div style={{ 
+                          color: '#4b5563', 
+                          lineHeight: '1.6',
+                          background: '#f9fafb',
+                          padding: '12px',
+                          borderRadius: '8px'
+                        }}>
+                          {call.call_summary}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Details Grid */}
+                    <div style={{ 
+                      display: 'grid', 
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                      gap: '16px',
+                      marginBottom: '20px'
+                    }}>
+                      {call.experience_summary && (
+                        <div style={{ 
+                          padding: '12px',
+                          background: '#f0f9ff',
+                          borderRadius: '8px'
+                        }}>
+                          <div style={{ fontWeight: '600', color: '#0369a1', marginBottom: '4px', fontSize: '13px' }}>
+                            ðŸ’¼ Experience
+                          </div>
+                          <div style={{ color: '#0c4a6e', fontSize: '14px' }}>
+                            {call.experience_summary}
+                          </div>
+                        </div>
+                      )}
+
+                      <div style={{ 
+                        padding: '12px',
+                        background: '#f0fdf4',
+                        borderRadius: '8px'
+                      }}>
+                        <div style={{ fontWeight: '600', color: '#166534', marginBottom: '4px', fontSize: '13px' }}>
+                          âœ… Compliance
+                        </div>
+                        <div style={{ color: '#14532d', fontSize: '14px' }}>
+                          <div>DBS: {call.dbs_status || 'Not discussed'}</div>
+                          <div>Driver: {call.driver || 'Not discussed'}</div>
+                          <div>Training: {call.mandatory_training || 'Not discussed'}</div>
+                        </div>
+                      </div>
+
+                      <div style={{ 
+                        padding: '12px',
+                        background: '#faf5ff',
+                        borderRadius: '8px'
+                      }}>
+                        <div style={{ fontWeight: '600', color: '#7c3aed', marginBottom: '4px', fontSize: '13px' }}>
+                          ðŸ“… Availability
+                        </div>
+                        <div style={{ color: '#581c87', fontSize: '14px' }}>
+                          <div>Start: {call.earliest_start_date || 'Not discussed'}</div>
+                          <div>Hours: {call.weekly_rota || 'Not discussed'}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Follow-up Actions */}
+                    {call.follow_up_questions && call.follow_up_questions.length > 0 && (
+                      <div style={{ marginBottom: '20px' }}>
+                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                          ðŸŽ¯ Follow-up Actions
+                        </div>
+                        <ul style={{ 
+                          margin: 0, 
+                          paddingLeft: '20px',
+                          color: '#4b5563'
+                        }}>
+                          {call.follow_up_questions.map((action, i) => (
+                            <li key={i} style={{ marginBottom: '4px' }}>{action}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Transcript */}
+                    {call.transcript && (
+                      <div>
+                        <div style={{ fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                          ðŸ“œ Full Transcript
+                        </div>
+                        <div style={{ 
+                          color: '#4b5563', 
+                          lineHeight: '1.6',
+                          background: '#f9fafb',
+                          padding: '12px',
+                          borderRadius: '8px',
+                          maxHeight: '300px',
+                          overflowY: 'auto',
+                          fontSize: '13px',
+                          whiteSpace: 'pre-wrap'
+                        }}>
+                          {call.transcript}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Action Buttons */}
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                      {activeTab === 'unprocessed' && (
+                        <button
+                          onClick={() => {
+                            setEditingCall(call.id);
+                            setEditForm({
+                              candidate_name: call.candidate_name || '',
+                              quality_assessment: call.quality_assessment || 'C',
+                              energy_score: call.energy_score || 5,
+                              call_summary: call.call_summary || ''
+                            });
+                          }}
+                          style={{
+                            padding: '10px 20px',
+                            background: '#3b82f6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontWeight: '500'
+                          }}
+                        >
+                          âœï¸ Grade This Call
+                        </button>
+                      )}
+                      
+                      <a
+                        href={`tel:${call.phone_e164}`}
+                        style={{
+                          padding: '10px 20px',
+                          background: '#22c55e',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '500',
+                          textDecoration: 'none',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        ðŸ“ž Call Back
+                      </a>
+
+                      <a
+                        href={`https://wa.me/${call.phone_e164?.replace('+', '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          padding: '10px 20px',
+                          background: '#25d366',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '500',
+                          textDecoration: 'none'
+                        }}
+                      >
+                        ðŸ’¬ WhatsApp
+                      </a>
+
+                      {onSelectCandidate && call.candidate_id && (
+                        <button
+                          onClick={() => onSelectCandidate({ id: call.candidate_id })}
+                          style={{
+                            padding: '10px 20px',
+                            background: 'white',
+                            color: '#3b82f6',
+                            border: '1px solid #3b82f6',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontWeight: '500'
+                          }}
+                        >
+                          View Full Profile â†’
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+===== src\app\ImportedCandidatesView.tsx =====
+
+'use client';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+interface Candidate {
+  id: string;
+  name: string;
+  phone_e164: string;
+  email?: string;
+  roles: string[];
+  source: string;
+  driver: string;
+  dbs_update_service: string;
+  mandatory_training: string;
+  created_at: string;
+  status: string;
+  is_called?: boolean;
+  last_called_at?: string;
+  energy_count?: number;
+}
+
+interface Props {
+  onSelectCandidate: (candidate: Candidate) => void;
+  onOpenImport: () => void;
+  onStartCampaign?: (candidates: Candidate[]) => void;
+}
+
+export default function ImportedCandidatesView({ onSelectCandidate, onOpenImport, onStartCampaign }: Props) {
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  // FETCH IMPORTED CANDIDATES - those with no last_called_at
+  const fetchCandidates = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      console.log('Fetching imported candidates (last_called_at IS NULL)...');
+      
+      // Direct query for candidates with NULL last_called_at
+      const { data, error: fetchError } = await supabase
+        .from('candidates')
+        .select('*')
+        .is('last_called_at', null)
+        .order('created_at', { ascending: false });
+      
+      if (fetchError) {
+        console.error('Supabase error:', fetchError);
+        setError(fetchError.message);
+        return;
+      }
+      
+      console.log('Imported candidates found:', data?.length || 0);
+      setCandidates(data || []);
+    } catch (e: any) {
+      console.error('Error:', e);
+      setError(e.message || 'Failed to load candidates');
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { 
+    fetchCandidates(); 
+  }, [fetchCandidates]);
+
+  // Get unique sources
+  const sources = useMemo(() => {
+    const s = new Set(candidates.map(c => c.source).filter(Boolean));
+    return Array.from(s).sort();
+  }, [candidates]);
+
+  // Filter candidates by search and source
+  const filteredCandidates = useMemo(() => {
+    let result = [...candidates];
+    
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(c =>
+        c.name?.toLowerCase().includes(q) ||
+        c.phone_e164?.includes(q) ||
+        c.source?.toLowerCase().includes(q)
+      );
+    }
+    
+    if (sourceFilter !== 'all') {
+      result = result.filter(c => c.source === sourceFilter);
+    }
+    
+    return result;
+  }, [candidates, searchQuery, sourceFilter]);
+
+  // Pagination
+  const totalPages = Math.ceil(filteredCandidates.length / pageSize);
+  const paginatedCandidates = filteredCandidates.slice((page - 1) * pageSize, page * pageSize);
+
+  // Selection
+  const handleSelectAll = () => {
+    if (selected.size === filteredCandidates.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filteredCandidates.map(c => c.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    const newSelected = new Set(selected);
+    if (newSelected.has(id)) newSelected.delete(id);
+    else newSelected.add(id);
+    setSelected(newSelected);
+  };
+
+  // Bulk delete
+  const handleBulkDelete = async () => {
+    if (!selected.size || !confirm(`Delete ${selected.size} candidates? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase.from('candidates').delete().in('id', Array.from(selected));
+      if (error) throw error;
+      setSelected(new Set());
+      fetchCandidates();
+    } catch (e) {
+      alert('Failed to delete');
+    }
+  };
+
+  // Mark as called
+  const handleMarkAsCalled = async () => {
+    if (!selected.size) return;
+    try {
+      const { error } = await supabase
+        .from('candidates')
+        .update({ is_called: true, status: 'new' })
+        .in('id', Array.from(selected));
+      if (error) throw error;
+      setSelected(new Set());
+      fetchCandidates();
+    } catch (e) {
+      alert('Failed to update');
+    }
+  };
+
+  // Start WhatsApp campaign
+  const handleStartCampaign = () => {
+    const selectedCandidates = filteredCandidates.filter(c => selected.has(c.id));
+    if (selectedCandidates.length === 0) {
+      alert('Please select candidates first');
+      return;
+    }
+    if (onStartCampaign) {
+      onStartCampaign(selectedCandidates);
+    }
+  };
+
+  const formatPhone = (phone: string) => {
+    if (!phone) return '-';
+    if (phone.startsWith('+44') && phone.length >= 12) {
+      return `+44 ${phone.slice(3, 7)} ${phone.slice(7, 10)} ${phone.slice(10)}`;
+    }
+    return phone;
+  };
+
+  const formatDate = (d: string) => {
+    if (!d) return '-';
+    return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  return (
+    <div style={{ padding: 24, height: '100%', display: 'flex', flexDirection: 'column', background: '#f9fafb' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <h1 style={{ margin: 0, fontSize: 24 }}>ðŸ“¥ Imported Candidates</h1>
+          <span style={{ background: '#e0e7ff', color: '#3730a3', padding: '4px 12px', borderRadius: 16, fontSize: 14, fontWeight: 600 }}>
+            {candidates.length} total
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={fetchCandidates} style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
+            ðŸ”„ Refresh
+          </button>
+          <button onClick={onOpenImport} style={{ padding: '10px 16px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontWeight: 500 }}>
+            âž• Import More
+          </button>
+        </div>
+      </div>
+
+      {/* Info Banner */}
+      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: 12, marginBottom: 16, color: '#1e40af', fontSize: 14 }}>
+        â„¹ï¸ These are candidates imported from CSV/CV who haven't been called via Dialpad yet. Select candidates to start a WhatsApp campaign.
+      </div>
+
+      {/* Error display */}
+      {error && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: 12, marginBottom: 16, color: '#dc2626' }}>
+          âŒ Error: {error}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+        <input
+          type="text"
+          placeholder="Search by name, phone, source..."
+          value={searchQuery}
+          onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
+          style={{ flex: 1, padding: 10, border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14 }}
+        />
+        <select 
+          value={sourceFilter} 
+          onChange={e => { setSourceFilter(e.target.value); setPage(1); }}
+          style={{ padding: 10, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 200 }}
+        >
+          <option value="all">All Sources ({sources.length})</option>
+          {sources.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+
+      {/* Bulk Actions */}
+      {selected.size > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#1e40af', color: '#fff', padding: '12px 20px', borderRadius: 10, marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 20, fontWeight: 700 }}>{selected.size}</span> selected
+            {selected.size < filteredCandidates.length && (
+              <button 
+                onClick={() => setSelected(new Set(filteredCandidates.map(c => c.id)))}
+                style={{ background: 'rgba(255,255,255,0.2)', border: 'none', padding: '4px 12px', borderRadius: 6, color: '#fff', cursor: 'pointer' }}
+              >
+                Select all {filteredCandidates.length}
+              </button>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={handleStartCampaign} style={{ padding: '8px 16px', background: '#25d366', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer', fontWeight: 500 }}>
+              ðŸ’¬ WhatsApp Campaign
+            </button>
+            <button onClick={handleMarkAsCalled} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer' }}>
+              âœ… Mark as Called
+            </button>
+            <button onClick={handleBulkDelete} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer' }}>
+              ðŸ—‘ï¸ Delete
+            </button>
+            <button onClick={() => setSelected(new Set())} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, color: '#fff', cursor: 'pointer' }}>
+              âœ• Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div style={{ flex: 1, overflow: 'auto', background: '#fff', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+        {loading ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 64, color: '#6b7280' }}>
+            Loading candidates...
+          </div>
+        ) : candidates.length === 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 64, color: '#6b7280' }}>
+            <div style={{ fontSize: 56, marginBottom: 16 }}>ðŸ“­</div>
+            <h3 style={{ margin: '0 0 8px', color: '#111' }}>No imported candidates</h3>
+            <p style={{ margin: '0 0 24px' }}>Import candidates from CSV to build your talent pool.</p>
+            <button onClick={onOpenImport} style={{ padding: '10px 20px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+              ðŸ“¥ Import Candidates
+            </button>
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: '#f9fafb' }}>
+                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', width: 40 }}>
+                  <input type="checkbox" checked={selected.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={handleSelectAll} />
+                </th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Name</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Phone</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Roles</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Source</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Imported</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Info</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paginatedCandidates.map(c => (
+                <tr 
+                  key={c.id} 
+                  style={{ cursor: 'pointer', background: selected.has(c.id) ? '#eff6ff' : 'transparent' }}
+                  onClick={() => onSelectCandidate(c)}
+                >
+                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }} onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} />
+                  </td>
+                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
+                    <strong style={{ color: '#111' }}>{c.name || 'Unknown'}</strong>
+                  </td>
+                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontFamily: 'monospace', fontSize: 12 }}>
+                    {formatPhone(c.phone_e164)}
+                  </td>
+                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
+                    {Array.isArray(c.roles) && c.roles.length > 0 ? (
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {c.roles.slice(0, 2).map((r, i) => (
+                          <span key={i} style={{ padding: '2px 8px', background: '#e0e7ff', color: '#3730a3', borderRadius: 4, fontSize: 11 }}>{r}</span>
+                        ))}
+                        {c.roles.length > 2 && <span style={{ padding: '2px 6px', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, fontSize: 11 }}>+{c.roles.length - 2}</span>}
+                      </div>
+                    ) : '-'}
+                  </td>
+                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
+                    <span style={{ padding: '4px 8px', background: '#f3f4f6', borderRadius: 4, fontSize: 11 }}>
+                      {c.source ? (c.source.length > 25 ? c.source.slice(0, 25) + '...' : c.source) : 'Import'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', color: '#6b7280', fontSize: 12 }}>
+                    {formatDate(c.created_at)}
+                  </td>
+                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontSize: 14 }}>
+                    {c.driver === 'Yes' && <span title="Driver">ðŸš—</span>}
+                    {c.dbs_update_service === 'Yes' && <span title="DBS">âœ…</span>}
+                    {c.mandatory_training === 'Yes' && <span title="Training">ðŸ“š</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, borderTop: '1px solid #e5e7eb', background: '#f9fafb' }}>
+            <button disabled={page === 1} onClick={() => setPage(1)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === 1 ? 'not-allowed' : 'pointer', opacity: page === 1 ? 0.5 : 1 }}>Â«Â«</button>
+            <button disabled={page === 1} onClick={() => setPage(p => p - 1)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === 1 ? 'not-allowed' : 'pointer', opacity: page === 1 ? 0.5 : 1 }}>â€¹ Prev</button>
+            <span style={{ padding: '0 16px', color: '#6b7280', fontSize: 13 }}>Page {page} of {totalPages} ({filteredCandidates.length} total)</span>
+            <button disabled={page === totalPages} onClick={() => setPage(p => p + 1)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === totalPages ? 'not-allowed' : 'pointer', opacity: page === totalPages ? 0.5 : 1 }}>Next â€º</button>
+            <button disabled={page === totalPages} onClick={() => setPage(totalPages)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === totalPages ? 'not-allowed' : 'pointer', opacity: page === totalPages ? 0.5 : 1 }}>Â»Â»</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+===== src\app\SMSCampaign.tsx =====
+
+'use client';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+interface Candidate {
+  id: string;
+  name: string | null;
+  phone_e164: string;
+  status: string;
+  source: string | null;
+  last_called_at: string | null;
+  sms_opt_out?: boolean;
+  roles?: string;
+  driver?: string;
+  dbs_update_service?: string;
+  created_at?: string;
+}
+
+interface SendLog {
+  phone: string;
+  name: string;
+  status: 'pending' | 'sent' | 'failed' | 'skipped';
+  error?: string;
+  reason?: string;
+}
+
+interface Conversation {
+  phone: string;
+  name: string | null;
+  candidateId: string | null;
+  roles: string | null;
+  messages: any[];
+  lastMessage: any;
+  hasResponse: boolean;
+  latestIntent: string | null;
+  latestSentiment: string | null;
+  lastActivity: Date;
+  unreadCount: number;
+  isHandled: boolean;
+}
+
+interface Campaign {
+  id: string;
+  name: string;
+  template: string;
+  total_recipients: number;
+  sent_count: number;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+}
+
+interface SavedAudience {
+  id: string;
+  name: string;
+  candidateIds: string[];
+  createdAt: string;
+}
+
+// Common care roles for quick filtering
+const CARE_ROLES = [
+  { key: 'hca', label: 'HCA', keywords: ['hca', 'health care assistant', 'healthcare assistant', 'care assistant'] },
+  { key: 'nurse', label: 'Nurse', keywords: ['nurse', 'rgn', 'rmn', 'registered nurse', 'staff nurse'] },
+  { key: 'senior', label: 'Senior Carer', keywords: ['senior carer', 'senior care', 'team leader', 'shift leader'] },
+  { key: 'support', label: 'Support Worker', keywords: ['support worker', 'support assistant', 'care support'] },
+  { key: 'driver', label: 'Drivers', keywords: [] }, // Special: uses driver field
+  { key: 'dbs', label: 'Has DBS', keywords: [] }, // Special: uses dbs field
+];
+
+// Message templates
+const MESSAGE_TEMPLATES = [
+  { name: 'Initial Outreach', text: 'Hi {name}, this is [Your Name] from [Company]. We have care positions available in your area. Are you looking for work? Reply YES if interested or STOP to opt out.' },
+  { name: 'Follow-up', text: 'Hi {name}, following up on my earlier message about care work. We have flexible shifts with great pay. Interested? Reply YES or STOP to opt out.' },
+  { name: 'Urgent Hiring', text: 'Hi {name}, URGENT: We need carers in your area this week! Great rates, flexible hours. Reply YES for immediate start or STOP to opt out.' },
+  { name: 'Nurses Only', text: 'Hi {name}, we have nursing shifts available at excellent rates. Interested in learning more? Reply YES or STOP to opt out.' },
+  { name: 'HCA Shifts', text: 'Hi {name}, HCA shifts available near you - days, nights, weekends. Competitive pay. Reply YES if interested or STOP to opt out.' },
+];
+
+// Quick replies
+const QUICK_REPLIES: Record<string, string[]> = {
+  interested: ['Great! When can I call you for a quick chat?', 'Brilliant! What areas are you looking to work in?', 'Thanks! Do you have any care experience?'],
+  question: ['Happy to help! Pay starts at Â£12/hr. When can I call?', 'Good question! We have flexible shifts. What works for you?'],
+  callback_request: ['I\'ll call you shortly!', 'Calling you in 30 mins.', 'What time works best?'],
+  not_interested: ['No problem. Best of luck!', 'Understood, thanks for letting me know.']
+};
+
+export default function SMSCampaignView() {
+  const [activeTab, setActiveTab] = useState<'compose' | 'conversations' | 'history'>('compose');
+  const [activeSubTab, setActiveSubTab] = useState<'select' | 'message' | 'send'>('select');
+  
+  // Candidates & Selection
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [sourceFilter, setSourceFilter] = useState<string>('all');
+  const [calledFilter, setCalledFilter] = useState<string>('all');
+  const [excludeOptOut, setExcludeOptOut] = useState(true);
+  const [excludeRecentlySent, setExcludeRecentlySent] = useState(true);
+  const [recentDays, setRecentDays] = useState(7);
+  const [sentPhones, setSentPhones] = useState<Set<string>>(new Set());
+  
+  // Saved audiences
+  const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
+  const [audienceName, setAudienceName] = useState('');
+  const [showSaveAudience, setShowSaveAudience] = useState(false);
+  
+  // Message
+  const [message, setMessage] = useState(MESSAGE_TEMPLATES[0].text);
+  const [campaignName, setCampaignName] = useState('');
+  
+  // Gateway
+  const [gatewayUrl, setGatewayUrl] = useState('http://192.168.1.100:8080');
+  const [gatewayUsername, setGatewayUsername] = useState('');
+  const [gatewayPassword, setGatewayPassword] = useState('');
+  const [sendDelay, setSendDelay] = useState(30);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [gatewayConnected, setGatewayConnected] = useState<boolean | null>(null);
+  
+  // Sending
+  const [isSending, setIsSending] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [sendLog, setSendLog] = useState<SendLog[]>([]);
+  const [sendStats, setSendStats] = useState({ sent: 0, failed: 0, skipped: 0 });
+  const abortRef = useRef(false);
+  const pausedRef = useRef(false);
+  const [isPausedDisplay, setIsPausedDisplay] = useState(false);
+  
+  // Conversations
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedConvo, setSelectedConvo] = useState<Conversation | null>(null);
+  const [convoFilter, setConvoFilter] = useState<string>('all');
+  const [convoSearch, setConvoSearch] = useState('');
+  const [replyMessage, setReplyMessage] = useState('');
+  const [sendingReply, setSendingReply] = useState(false);
+  const [handledConvos, setHandledConvos] = useState<Set<string>>(new Set());
+  
+  // History
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  
+  // Test
+  const [testPhone, setTestPhone] = useState('');
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Load on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    try {
+      const saved = localStorage.getItem('smsGatewaySettings');
+      if (saved) {
+        const s = JSON.parse(saved);
+        setGatewayUrl(s.url || 'http://192.168.1.100:8080');
+        setGatewayUsername(s.username || '');
+        setGatewayPassword(s.password || '');
+        setSendDelay(s.delay || 30);
+      }
+    } catch (e) {
+      console.error('Error loading gateway settings:', e);
+    }
+    
+    try {
+      const savedHandled = localStorage.getItem('handledConversations');
+      if (savedHandled) setHandledConvos(new Set(JSON.parse(savedHandled)));
+    } catch (e) {
+      console.error('Error loading handled conversations:', e);
+    }
+    
+    try {
+      const savedAuds = localStorage.getItem('smsAudiences');
+      if (savedAuds) setSavedAudiences(JSON.parse(savedAuds));
+    } catch (e) {
+      console.error('Error loading audiences:', e);
+    }
+    
+    loadCandidates();
+    loadConversations();
+    loadCampaigns();
+    loadSentPhones();
+  }, []);
+
+  useEffect(() => { loadSentPhones(); }, [recentDays]);
+  
+  useEffect(() => { 
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('handledConversations', JSON.stringify([...handledConvos])); 
+      } catch (e) {
+        console.error('Error saving handled conversations:', e);
+      }
+    }
+  }, [handledConvos]);
+  
+  useEffect(() => { 
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('smsAudiences', JSON.stringify(savedAudiences)); 
+      } catch (e) {
+        console.error('Error saving audiences:', e);
+      }
+    }
+  }, [savedAudiences]);
+
+  const saveGatewaySettings = () => {
+    localStorage.setItem('smsGatewaySettings', JSON.stringify({ url: gatewayUrl, username: gatewayUsername, password: gatewayPassword, delay: sendDelay }));
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 2000);
+  };
+
+  async function loadCandidates() {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('candidates')
+        .select('id, name, phone_e164, status, source, last_called_at, sms_opt_out, roles, driver, dbs_update_service, created_at')
+        .not('phone_e164', 'is', null)
+        .order('created_at', { ascending: false });
+      if (error) {
+        console.error('Error loading candidates:', error);
+      }
+      if (data) setCandidates(data);
+    } catch (e) {
+      console.error('Error loading candidates:', e);
+    }
+    setLoading(false);
+  }
+
+  async function loadSentPhones() {
+    try {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - recentDays);
+      const { data, error } = await supabase.from('sms_messages').select('phone_e164').eq('direction', 'outbound').gte('created_at', cutoff.toISOString());
+      if (error) {
+        console.error('Error loading sent phones:', error);
+        return;
+      }
+      if (data) setSentPhones(new Set(data.map(m => m.phone_e164)));
+    } catch (e) {
+      console.error('Error loading sent phones:', e);
+    }
+  }
+
+  async function loadConversations() {
+    try {
+      const { data, error } = await supabase.from('sms_messages').select('*, candidates(id, name, roles, status)').order('created_at', { ascending: false }).limit(500);
+      if (error) {
+        console.error('Error loading conversations:', error);
+        return;
+      }
+      if (data && data.length > 0) {
+      const grouped = new Map<string, any[]>();
+      data.forEach(msg => {
+        const existing = grouped.get(msg.phone_e164) || [];
+        existing.push(msg);
+        grouped.set(msg.phone_e164, existing);
+      });
+      
+      const convos: Conversation[] = Array.from(grouped.entries()).map(([phone, msgs]) => {
+        const sorted = msgs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        const latestIn = msgs.filter(m => m.direction === 'inbound').sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        const latestOut = msgs.filter(m => m.direction === 'outbound').sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        let unread = 0;
+        if (latestIn) {
+          if (latestOut) unread = msgs.filter(m => m.direction === 'inbound' && new Date(m.created_at) > new Date(latestOut.created_at)).length;
+          else unread = msgs.filter(m => m.direction === 'inbound').length;
+        }
+        return {
+          phone,
+          name: msgs.find(m => m.candidates?.name)?.candidates?.name || null,
+          candidateId: msgs.find(m => m.candidates?.id)?.candidates?.id || null,
+          roles: msgs.find(m => m.candidates?.roles)?.candidates?.roles || null,
+          messages: sorted,
+          lastMessage: msgs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0],
+          hasResponse: msgs.some(m => m.direction === 'inbound'),
+          latestIntent: latestIn?.ai_intent || null,
+          latestSentiment: latestIn?.ai_sentiment || null,
+          lastActivity: new Date(msgs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0].created_at),
+          unreadCount: unread,
+          isHandled: handledConvos.has(phone)
+        };
+      });
+      convos.sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime());
+      setConversations(convos);
+      }
+    } catch (e) {
+      console.error('Error loading conversations:', e);
+    }
+  }
+
+  async function loadCampaigns() {
+    try {
+      const { data, error } = await supabase.from('sms_campaigns').select('*').order('created_at', { ascending: false }).limit(50);
+      if (error) {
+        console.error('Error loading campaigns:', error);
+        return;
+      }
+      if (data) setCampaigns(data);
+    } catch (e) {
+      console.error('Error loading campaigns:', e);
+    }
+  }
+
+  // Parse roles from string (could be comma-separated, JSON array, or plain text)
+  const parseRoles = (rolesStr: string | null | undefined): string[] => {
+    if (!rolesStr) return [];
+    if (typeof rolesStr !== 'string') return [];
+    try {
+      const parsed = JSON.parse(rolesStr);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(r => r && typeof r === 'string')
+          .map(r => r.toLowerCase().trim());
+      }
+    } catch {}
+    return rolesStr.toLowerCase().split(/[,;|]/).map(r => r.trim()).filter(Boolean);
+  };
+
+  // Check if candidate matches a role filter
+  const matchesRole = (candidate: Candidate, roleKey: string): boolean => {
+    if (roleKey === 'all') return true;
+    
+    const role = CARE_ROLES.find(r => r.key === roleKey);
+    if (!role) return true;
+    
+    // Special cases - ensure values are strings before calling toLowerCase
+    if (roleKey === 'driver') {
+      const driver = candidate.driver;
+      return typeof driver === 'string' && driver.toLowerCase() === 'yes';
+    }
+    if (roleKey === 'dbs') {
+      const dbs = candidate.dbs_update_service;
+      return typeof dbs === 'string' && dbs.toLowerCase() === 'yes';
+    }
+    
+    const candidateRoles = parseRoles(candidate.roles);
+    const rolesStr = candidate.roles;
+    return role.keywords.some(kw => 
+      candidateRoles.some(cr => cr.includes(kw)) || 
+      (typeof rolesStr === 'string' && rolesStr.toLowerCase().includes(kw))
+    );
+  };
+
+  // Phone validation
+  const isValidPhone = (phone: string | null | undefined): boolean => {
+    if (!phone || typeof phone !== 'string') return false;
+    try {
+      const cleaned = phone.replace(/[\s\-\(\)\.]/g, '');
+      let e164 = cleaned;
+      if (cleaned.startsWith('0')) e164 = '+44' + cleaned.slice(1);
+      else if (!cleaned.startsWith('+')) e164 = '+' + cleaned;
+      return e164.startsWith('+447') && e164.length === 13;
+    } catch {
+      return false;
+    }
+  };
+
+  // Filtered candidates (for display)
+  const filteredCandidates = useMemo(() => {
+    if (!candidates || candidates.length === 0) return [];
+    return candidates.filter(c => {
+      if (!c || !c.phone_e164 || !isValidPhone(c.phone_e164)) return false;
+      if (excludeOptOut && c.sms_opt_out) return false;
+      if (excludeRecentlySent && sentPhones.has(c.phone_e164)) return false;
+      if (!matchesRole(c, roleFilter)) return false;
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      if (sourceFilter !== 'all' && c.source !== sourceFilter) return false;
+      if (calledFilter === 'called' && !c.last_called_at) return false;
+      if (calledFilter === 'not-called' && c.last_called_at) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const nameMatch = typeof c.name === 'string' && c.name.toLowerCase().includes(q);
+        const phoneMatch = c.phone_e164.includes(q);
+        const roleMatch = typeof c.roles === 'string' && c.roles.toLowerCase().includes(q);
+        if (!nameMatch && !phoneMatch && !roleMatch) return false;
+      }
+      return true;
+    });
+  }, [candidates, excludeOptOut, excludeRecentlySent, sentPhones, roleFilter, statusFilter, sourceFilter, calledFilter, searchQuery]);
+
+  // Selected candidates (for sending)
+  const selectedCandidates = useMemo(() => {
+    if (!candidates || candidates.length === 0) return [];
+    return candidates.filter(c => c && c.phone_e164 && selectedIds.has(c.id) && isValidPhone(c.phone_e164));
+  }, [candidates, selectedIds]);
+
+  // Get unique values for filters
+  const uniqueSources = useMemo(() => {
+    if (!candidates || candidates.length === 0) return [];
+    return [...new Set(candidates.map(c => c.source).filter(Boolean))];
+  }, [candidates]);
+  
+  const uniqueStatuses = useMemo(() => {
+    if (!candidates || candidates.length === 0) return [];
+    return [...new Set(candidates.map(c => c.status).filter(Boolean))];
+  }, [candidates]);
+
+  // Role counts
+  const roleCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: filteredCandidates?.length || 0 };
+    if (!candidates || candidates.length === 0) return counts;
+    CARE_ROLES.forEach(role => {
+      counts[role.key] = candidates.filter(c => 
+        c && c.phone_e164 && isValidPhone(c.phone_e164) && 
+        (!excludeOptOut || !c.sms_opt_out) && 
+        (!excludeRecentlySent || !sentPhones.has(c.phone_e164)) &&
+        matchesRole(c, role.key)
+      ).length;
+    });
+    return counts;
+  }, [candidates, filteredCandidates?.length, excludeOptOut, excludeRecentlySent, sentPhones]);
+
+  // Selection handlers
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      return newSet;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedIds(new Set(filteredCandidates.map(c => c.id)));
+  };
+
+  const selectNone = () => {
+    setSelectedIds(new Set());
+  };
+
+  const selectByRole = (roleKey: string) => {
+    const matching = candidates.filter(c => 
+      c && c.phone_e164 && isValidPhone(c.phone_e164) && 
+      (!excludeOptOut || !c.sms_opt_out) && 
+      matchesRole(c, roleKey)
+    );
+    setSelectedIds(new Set(matching.map(c => c.id)));
+  };
+
+  const loadAudience = (audience: SavedAudience) => {
+    setSelectedIds(new Set(audience.candidateIds));
+  };
+
+  const saveAudience = () => {
+    if (!audienceName.trim() || selectedIds.size === 0) return;
+    const newAud: SavedAudience = {
+      id: Date.now().toString(),
+      name: audienceName.trim(),
+      candidateIds: [...selectedIds],
+      createdAt: new Date().toISOString()
+    };
+    setSavedAudiences(prev => [newAud, ...prev]);
+    setAudienceName('');
+    setShowSaveAudience(false);
+  };
+
+  const deleteAudience = (id: string) => {
+    setSavedAudiences(prev => prev.filter(a => a.id !== id));
+  };
+
+  // Message helpers
+  const personalizeMessage = (template: string, candidate: Candidate) => {
+    const firstName = candidate.name?.split(' ')[0] || 'there';
+    return template.replace(/{name}/gi, firstName).replace(/{full_name}/gi, candidate.name || 'there');
+  };
+
+  const charCount = message.length;
+  const smsCount = Math.ceil(charCount / 160) || 1;
+
+  // Gateway
+  async function sendViaGateway(phone: string, text: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const creds = btoa(`${gatewayUsername}:${gatewayPassword}`);
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 30000);
+      const res = await fetch(`${gatewayUrl}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Basic ${creds}` },
+        body: JSON.stringify({ message: text, phoneNumbers: [phone] }),
+        signal: ctrl.signal
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return { success: false, error: err.message || `HTTP ${res.status}` };
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e.name === 'AbortError' ? 'Timeout' : e.message };
+    }
+  }
+
+  async function testGateway() {
+    try {
+      const creds = btoa(`${gatewayUsername}:${gatewayPassword}`);
+      const res = await fetch(`${gatewayUrl}/health`, { headers: { 'Authorization': `Basic ${creds}` } });
+      setGatewayConnected(res.ok);
+    } catch { setGatewayConnected(false); }
+  }
+
+  async function sendTestSMS() {
+    if (!testPhone) return;
+    setTestSending(true);
+    setTestResult(null);
+    let phone = testPhone.replace(/\s/g, '');
+    if (phone.startsWith('0')) phone = '+44' + phone.slice(1);
+    if (!phone.startsWith('+')) phone = '+' + phone;
+    const result = await sendViaGateway(phone, personalizeMessage(message, { id: 'test', name: 'Test', phone_e164: phone, status: 'test', source: null, last_called_at: null }));
+    setTestResult({ success: result.success, message: result.success ? 'âœ“ Sent!' : `âœ— ${result.error}` });
+    setTestSending(false);
+  }
+
+  // Campaign sending
+  async function startSending() {
+    if (selectedCandidates.length === 0) { alert('No candidates selected!'); return; }
+    if (!gatewayUsername) { alert('Enter gateway credentials first!'); return; }
+    
+    setIsSending(true);
+    pausedRef.current = false;
+    setIsPausedDisplay(false);
+    abortRef.current = false;
+    setCurrentIndex(0);
+    setSendLog([]);
+    setSendStats({ sent: 0, failed: 0, skipped: 0 });
+    
+    const campaignSent = new Set<string>();
+    const { data: campaign } = await supabase.from('sms_campaigns').insert({
+      name: campaignName || `Campaign ${new Date().toLocaleDateString('en-GB')}`,
+      template: message,
+      total_recipients: selectedCandidates.length,
+      sent_count: 0,
+      status: 'sending',
+      started_at: new Date().toISOString()
+    }).select().single();
+
+    let sent = 0, failed = 0, skipped = 0;
+
+    for (let i = 0; i < selectedCandidates.length; i++) {
+      if (abortRef.current) break;
+      while (pausedRef.current && !abortRef.current) await new Promise(r => setTimeout(r, 500));
+      if (abortRef.current) break;
+
+      const c = selectedCandidates[i];
+      setCurrentIndex(i);
+      
+      if (campaignSent.has(c.phone_e164)) {
+        setSendLog(prev => [...prev, { phone: c.phone_e164, name: c.name || 'Unknown', status: 'skipped', reason: 'Duplicate' }]);
+        skipped++;
+        setSendStats({ sent, failed, skipped });
+        continue;
+      }
+
+      setSendLog(prev => [...prev, { phone: c.phone_e164, name: c.name || 'Unknown', status: 'pending' }]);
+      const result = await sendViaGateway(c.phone_e164, personalizeMessage(message, c));
+      
+      if (result.success) {
+        await supabase.from('sms_messages').insert({
+          candidate_id: c.id,
+          phone_e164: c.phone_e164,
+          direction: 'outbound',
+          message_text: personalizeMessage(message, c),
+          campaign_id: campaign?.id,
+          status: 'sent',
+          sent_at: new Date().toISOString()
+        });
+        campaignSent.add(c.phone_e164);
+        sent++;
+        setSendLog(prev => prev.map((item, idx) => idx === prev.length - 1 ? { ...item, status: 'sent' } : item));
+      } else {
+        failed++;
+        setSendLog(prev => prev.map((item, idx) => idx === prev.length - 1 ? { ...item, status: 'failed', error: result.error } : item));
+      }
+      setSendStats({ sent, failed, skipped });
+
+      if (i < selectedCandidates.length - 1 && !abortRef.current) {
+        await new Promise(r => setTimeout(r, sendDelay * 1000));
+      }
+    }
+
+    if (campaign?.id) {
+      await supabase.from('sms_campaigns').update({ status: abortRef.current ? 'stopped' : 'completed', sent_count: sent, completed_at: new Date().toISOString() }).eq('id', campaign.id);
+    }
+    setIsSending(false);
+    loadCampaigns();
+    loadSentPhones();
+  }
+
+  // Reply
+  async function sendReply() {
+    if (!selectedConvo || !replyMessage.trim()) return;
+    setSendingReply(true);
+    const result = await sendViaGateway(selectedConvo.phone, replyMessage.trim());
+    if (result.success) {
+      await supabase.from('sms_messages').insert({
+        candidate_id: selectedConvo.candidateId,
+        phone_e164: selectedConvo.phone,
+        direction: 'outbound',
+        message_text: replyMessage.trim(),
+        status: 'sent',
+        sent_at: new Date().toISOString()
+      });
+      setReplyMessage('');
+      setHandledConvos(prev => new Set([...prev, selectedConvo.phone]));
+      loadConversations();
+    } else {
+      alert('Failed: ' + result.error);
+    }
+    setSendingReply(false);
+  }
+
+  // Filtered conversations
+  const filteredConversations = useMemo(() => {
+    if (!conversations || conversations.length === 0) return [];
+    return conversations.filter(c => {
+      if (convoSearch) {
+        const q = convoSearch.toLowerCase();
+        const nameMatch = typeof c.name === 'string' && c.name.toLowerCase().includes(q);
+        const phoneMatch = typeof c.phone === 'string' && c.phone.includes(q);
+        if (!nameMatch && !phoneMatch) return false;
+      }
+      if (convoFilter === 'needs_action') return c.hasResponse && ['interested', 'callback_request', 'question'].includes(c.latestIntent || '') && !c.isHandled;
+      if (convoFilter === 'interested') return c.latestIntent === 'interested';
+      if (convoFilter === 'handled') return c.isHandled;
+      return true;
+    });
+  }, [conversations, convoSearch, convoFilter]);
+
+  const convoStats = useMemo(() => ({
+    total: conversations?.length || 0,
+    needsAction: (conversations || []).filter(c => c.hasResponse && ['interested', 'callback_request', 'question'].includes(c.latestIntent || '') && !c.isHandled).length,
+    interested: (conversations || []).filter(c => c.latestIntent === 'interested').length
+  }), [conversations]);
+
+  const getIntentConfig = (intent: string | null) => {
+    switch (intent) {
+      case 'interested': return { bg: '#dcfce7', text: '#166534', icon: 'âœ“' };
+      case 'callback_request': return { bg: '#dbeafe', text: '#1e40af', icon: 'ðŸ“ž' };
+      case 'question': return { bg: '#fef3c7', text: '#92400e', icon: 'â“' };
+      case 'not_interested': case 'stop_request': return { bg: '#fee2e2', text: '#991b1b', icon: 'âœ—' };
+      default: return { bg: '#f3f4f6', text: '#6b7280', icon: 'â€¢' };
+    }
+  };
+
+  const formatTime = (date: Date) => {
+    const diff = Date.now() - date.getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(diff / 3600000);
+    if (hrs < 24) return `${hrs}h`;
+    const days = Math.floor(diff / 86400000);
+    return `${days}d`;
+  };
+
+  return (
+    <div style={{ background: '#f8fafc', minHeight: '100%' }}>
+      <style>{`
+        .sms-tabs{display:flex;border-bottom:1px solid #e5e7eb;background:#fff;padding:0 24px}
+        .sms-tab{padding:16px 24px;font-size:14px;font-weight:600;color:#6b7280;cursor:pointer;border-bottom:3px solid transparent;display:flex;align-items:center;gap:8px}
+        .sms-tab:hover{color:#111;background:#f9fafb}
+        .sms-tab.active{color:#4f46e5;border-bottom-color:#4f46e5}
+        .sms-badge{padding:2px 8px;background:#ef4444;color:#fff;border-radius:10px;font-size:11px;font-weight:700}
+        .sms-badge.green{background:#22c55e}
+        
+        .sms-content{padding:24px}
+        .sms-grid{display:grid;grid-template-columns:1fr 400px;gap:24px}
+        @media(max-width:1200px){.sms-grid{grid-template-columns:1fr}}
+        
+        .sms-panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden}
+        .sms-panel-header{padding:14px 18px;border-bottom:1px solid #e5e7eb;font-weight:600;display:flex;justify-content:space-between;align-items:center;background:#fafafa}
+        .sms-panel-body{padding:18px}
+        
+        .sms-sub-tabs{display:flex;gap:4px;margin-bottom:16px;background:#f3f4f6;padding:4px;border-radius:8px}
+        .sms-sub-tab{flex:1;padding:10px;text-align:center;font-size:13px;font-weight:600;border-radius:6px;cursor:pointer;color:#6b7280}
+        .sms-sub-tab:hover{background:#e5e7eb}
+        .sms-sub-tab.active{background:#fff;color:#111;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+        
+        .sms-input{width:100%;padding:10px 14px;border:2px solid #e5e7eb;border-radius:8px;font-size:14px;box-sizing:border-box}
+        .sms-input:focus{outline:none;border-color:#4f46e5}
+        .sms-textarea{width:100%;padding:12px 14px;border:2px solid #e5e7eb;border-radius:8px;font-size:14px;min-height:100px;resize:vertical;font-family:inherit;box-sizing:border-box}
+        .sms-textarea:focus{outline:none;border-color:#4f46e5}
+        .sms-select{padding:8px 12px;border:2px solid #e5e7eb;border-radius:6px;font-size:13px;background:#fff}
+        
+        .sms-btn{padding:12px 18px;font-size:14px;font-weight:600;border-radius:8px;cursor:pointer;border:none;transition:all .2s;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+        .sms-btn:disabled{opacity:.5;cursor:not-allowed}
+        .sms-btn.primary{background:#22c55e;color:#fff}
+        .sms-btn.primary:hover:not(:disabled){background:#16a34a}
+        .sms-btn.secondary{background:#f3f4f6;color:#374151}
+        .sms-btn.secondary:hover:not(:disabled){background:#e5e7eb}
+        .sms-btn.purple{background:#4f46e5;color:#fff}
+        .sms-btn.purple:hover:not(:disabled){background:#4338ca}
+        .sms-btn.danger{background:#fee2e2;color:#dc2626}
+        .sms-btn.small{padding:8px 12px;font-size:12px}
+        .sms-btn.block{width:100%}
+        
+        .sms-role-btns{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+        .sms-role-btn{padding:8px 14px;border:2px solid #e5e7eb;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:#fff;transition:all .2s}
+        .sms-role-btn:hover{border-color:#4f46e5;background:#eef2ff}
+        .sms-role-btn.active{border-color:#4f46e5;background:#4f46e5;color:#fff}
+        .sms-role-btn span{font-weight:400;opacity:.7;margin-left:4px}
+        
+        .sms-candidate-list{max-height:400px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px}
+        .sms-candidate{padding:12px 14px;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;gap:12px;cursor:pointer}
+        .sms-candidate:hover{background:#f9fafb}
+        .sms-candidate.selected{background:#eef2ff}
+        .sms-candidate-check{width:20px;height:20px;border:2px solid #d1d5db;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0}
+        .sms-candidate.selected .sms-candidate-check{background:#4f46e5;border-color:#4f46e5}
+        .sms-candidate-info{flex:1;min-width:0}
+        .sms-candidate-name{font-weight:600;font-size:14px}
+        .sms-candidate-meta{font-size:12px;color:#6b7280;display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+        .sms-candidate-role{padding:2px 8px;background:#f3f4f6;border-radius:4px;font-size:11px;font-weight:500}
+        
+        .sms-selection-bar{display:flex;justify-content:space-between;align-items:center;padding:12px;background:#eef2ff;border-radius:8px;margin-bottom:12px}
+        
+        .sms-audiences{margin-bottom:16px}
+        .sms-audience{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#f9fafb;border-radius:6px;margin-bottom:6px}
+        .sms-audience-name{font-weight:500;font-size:13px}
+        .sms-audience-count{font-size:12px;color:#6b7280}
+        
+        .sms-templates{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+        .sms-template{padding:6px 12px;border:1px solid #e5e7eb;border-radius:6px;font-size:12px;cursor:pointer;background:#fff}
+        .sms-template:hover{border-color:#4f46e5}
+        .sms-template.active{background:#4f46e5;color:#fff;border-color:#4f46e5}
+        
+        .sms-preview{margin-top:12px;padding:14px;background:#f0f9ff;border:1px solid #7dd3fc;border-radius:8px}
+        .sms-preview-title{font-size:12px;font-weight:600;color:#0369a1;margin-bottom:6px}
+        .sms-preview-text{font-size:13px;color:#0c4a6e;line-height:1.5;white-space:pre-wrap}
+        
+        .sms-progress{margin-top:16px;padding:14px;background:#f9fafb;border-radius:8px}
+        .sms-progress-bar{height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden}
+        .sms-progress-fill{height:100%;background:#4f46e5;transition:width .3s}
+        .sms-progress-stats{display:flex;justify-content:space-between;margin-top:10px;font-size:12px}
+        
+        .sms-log{max-height:200px;overflow-y:auto;margin-top:12px;border:1px solid #e5e7eb;border-radius:6px;font-size:12px}
+        .sms-log-item{padding:8px 12px;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between}
+        .sms-log-item.sent{background:#f0fdf4}
+        .sms-log-item.failed{background:#fef2f2}
+        .sms-log-item.skipped{background:#fffbeb}
+        
+        .sms-convo-container{display:flex;height:calc(100vh - 120px)}
+        .sms-convo-sidebar{width:380px;border-right:1px solid #e5e7eb;background:#fff;display:flex;flex-direction:column}
+        .sms-convo-header{padding:16px;border-bottom:1px solid #e5e7eb}
+        .sms-convo-list{flex:1;overflow-y:auto}
+        .sms-convo{padding:14px 16px;border-bottom:1px solid #f3f4f6;cursor:pointer;display:flex;gap:12px;align-items:center}
+        .sms-convo:hover{background:#f9fafb}
+        .sms-convo.active{background:#eef2ff;border-left:3px solid #4f46e5}
+        .sms-convo-avatar{width:40px;height:40px;border-radius:10px;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
+        .sms-convo-info{flex:1;min-width:0}
+        .sms-convo-name{font-weight:600;font-size:14px}
+        .sms-convo-preview{font-size:12px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sms-convo-badge{padding:4px 8px;border-radius:6px;font-size:10px;font-weight:700}
+        
+        .sms-detail{flex:1;display:flex;flex-direction:column;background:#f8fafc}
+        .sms-detail-header{padding:16px 20px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center}
+        .sms-messages{flex:1;padding:20px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+        .sms-message{max-width:75%;padding:10px 14px;border-radius:12px}
+        .sms-message.out{background:#4f46e5;color:#fff;align-self:flex-end}
+        .sms-message.in{background:#fff;border:1px solid #e5e7eb;align-self:flex-start}
+        .sms-ai-box{max-width:75%;padding:10px;background:#fefce8;border:1px solid #fde047;border-radius:8px;font-size:12px;align-self:flex-start;margin-top:-4px}
+        .sms-quick-replies{padding:12px 20px;background:#fff;border-top:1px solid #e5e7eb;display:flex;gap:8px;flex-wrap:wrap}
+        .sms-quick-reply{padding:6px 12px;background:#f3f4f6;border-radius:6px;font-size:12px;cursor:pointer}
+        .sms-quick-reply:hover{background:#e5e7eb}
+        .sms-reply-box{padding:14px 20px;background:#fff;border-top:1px solid #e5e7eb;display:flex;gap:10px}
+        .sms-reply-input{flex:1;padding:10px 14px;border:2px solid #e5e7eb;border-radius:8px;font-size:14px;resize:none}
+        .sms-reply-input:focus{outline:none;border-color:#4f46e5}
+        .sms-reply-btn{padding:10px 20px;background:#4f46e5;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer}
+        .sms-reply-btn:disabled{opacity:.5}
+        
+        .sms-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#9ca3af}
+        .sms-empty-icon{font-size:40px;margin-bottom:12px;opacity:.5}
+        
+        .sms-history-table{width:100%;border-collapse:collapse}
+        .sms-history-table th{padding:12px;text-align:left;font-size:12px;color:#6b7280;background:#f9fafb;border-bottom:1px solid #e5e7eb}
+        .sms-history-table td{padding:12px;font-size:13px;border-bottom:1px solid #f3f4f6}
+        .sms-campaign-status{padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600}
+        .sms-campaign-status.completed{background:#dcfce7;color:#166534}
+        .sms-campaign-status.sending{background:#dbeafe;color:#1e40af}
+        .sms-campaign-status.stopped{background:#fee2e2;color:#991b1b}
+      `}</style>
+
+      {/* Tabs */}
+      <div className="sms-tabs">
+        <div className={`sms-tab ${activeTab === 'compose' ? 'active' : ''}`} onClick={() => setActiveTab('compose')}>ðŸ“± SMS Campaign</div>
+        <div className={`sms-tab ${activeTab === 'conversations' ? 'active' : ''}`} onClick={() => { setActiveTab('conversations'); loadConversations(); }}>
+          ðŸ’¬ Conversations
+          {convoStats.needsAction > 0 && <span className="sms-badge">{convoStats.needsAction}</span>}
+        </div>
+        <div className={`sms-tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => { setActiveTab('history'); loadCampaigns(); }}>ðŸ“Š History</div>
+      </div>
+
+      {/* Compose Tab */}
+      {activeTab === 'compose' && (
+        <div className="sms-content">
+          {/* Sub-tabs for workflow */}
+          <div className="sms-sub-tabs">
+            <div className={`sms-sub-tab ${activeSubTab === 'select' ? 'active' : ''}`} onClick={() => setActiveSubTab('select')}>
+              1. Select Recipients {selectedIds.size > 0 && `(${selectedIds.size})`}
+            </div>
+            <div className={`sms-sub-tab ${activeSubTab === 'message' ? 'active' : ''}`} onClick={() => setActiveSubTab('message')}>
+              2. Write Message
+            </div>
+            <div className={`sms-sub-tab ${activeSubTab === 'send' ? 'active' : ''}`} onClick={() => setActiveSubTab('send')}>
+              3. Send Campaign
+            </div>
+          </div>
+
+          {/* Step 1: Select Recipients */}
+          {activeSubTab === 'select' && (
+            <div className="sms-grid">
+              <div>
+                <div className="sms-panel">
+                  <div className="sms-panel-header">
+                    <span>ðŸŽ¯ Select Recipients</span>
+                    <span style={{ fontWeight: 700, color: selectedIds.size > 0 ? '#16a34a' : '#6b7280' }}>
+                      {selectedIds.size} selected
+                    </span>
+                  </div>
+                  <div className="sms-panel-body">
+                    {/* Quick Role Buttons */}
+                    <div className="sms-role-btns">
+                      <button 
+                        className={`sms-role-btn ${roleFilter === 'all' ? 'active' : ''}`}
+                        onClick={() => setRoleFilter('all')}
+                      >
+                        All <span>({roleCounts.all})</span>
+                      </button>
+                      {CARE_ROLES.map(role => (
+                        <button 
+                          key={role.key}
+                          className={`sms-role-btn ${roleFilter === role.key ? 'active' : ''}`}
+                          onClick={() => setRoleFilter(role.key)}
+                        >
+                          {role.label} <span>({roleCounts[role.key] || 0})</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Search & Filters */}
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+                      <input 
+                        className="sms-input" 
+                        style={{ flex: 1, minWidth: 200, marginBottom: 0 }}
+                        placeholder="ðŸ” Search name, phone, role..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                      />
+                      <select className="sms-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                        <option value="all">All Statuses</option>
+                        {uniqueStatuses.map(s => <option key={s} value={s!}>{s}</option>)}
+                      </select>
+                      <select className="sms-select" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
+                        <option value="all">All Sources</option>
+                        {uniqueSources.map(s => <option key={s} value={s!}>{s}</option>)}
+                      </select>
+                    </div>
+
+                    {/* Selection Bar */}
+                    <div className="sms-selection-bar">
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="sms-btn small secondary" onClick={selectAll}>Select All ({filteredCandidates.length})</button>
+                        <button className="sms-btn small secondary" onClick={selectNone}>Clear</button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button className="sms-btn small purple" onClick={() => selectByRole('hca')}>All HCAs</button>
+                        <button className="sms-btn small purple" onClick={() => selectByRole('nurse')}>All Nurses</button>
+                      </div>
+                    </div>
+
+                    {/* Checkboxes */}
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={excludeOptOut} onChange={e => setExcludeOptOut(e.target.checked)} />
+                        Exclude opted-out
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={excludeRecentlySent} onChange={e => setExcludeRecentlySent(e.target.checked)} />
+                        Exclude sent in last {recentDays} days
+                      </label>
+                    </div>
+
+                    {/* Candidate List */}
+                    <div className="sms-candidate-list">
+                      {loading ? (
+                        <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>Loading...</div>
+                      ) : filteredCandidates.length === 0 ? (
+                        <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>No candidates match filters</div>
+                      ) : filteredCandidates.map(c => (
+                        <div 
+                          key={c.id} 
+                          className={`sms-candidate ${selectedIds.has(c.id) ? 'selected' : ''}`}
+                          onClick={() => toggleSelect(c.id)}
+                        >
+                          <div className="sms-candidate-check">{selectedIds.has(c.id) && 'âœ“'}</div>
+                          <div className="sms-candidate-info">
+                            <div className="sms-candidate-name">{c.name || 'Unknown'}</div>
+                            <div className="sms-candidate-meta">
+                              <span>{c.phone_e164}</span>
+                              {c.roles && <span className="sms-candidate-role">{c.roles}</span>}
+                              {c.driver === 'Yes' && <span className="sms-candidate-role">ðŸš— Driver</span>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sidebar: Saved Audiences */}
+              <div>
+                <div className="sms-panel">
+                  <div className="sms-panel-header">
+                    <span>ðŸ“ Saved Audiences</span>
+                    <button className="sms-btn small secondary" onClick={() => setShowSaveAudience(!showSaveAudience)}>
+                      {showSaveAudience ? 'Cancel' : '+ Save'}
+                    </button>
+                  </div>
+                  <div className="sms-panel-body">
+                    {showSaveAudience && (
+                      <div style={{ marginBottom: 16 }}>
+                        <input 
+                          className="sms-input"
+                          placeholder="Audience name..."
+                          value={audienceName}
+                          onChange={e => setAudienceName(e.target.value)}
+                          style={{ marginBottom: 8 }}
+                        />
+                        <button 
+                          className="sms-btn primary block"
+                          onClick={saveAudience}
+                          disabled={!audienceName.trim() || selectedIds.size === 0}
+                        >
+                          Save {selectedIds.size} Recipients
+                        </button>
+                      </div>
+                    )}
+                    
+                    {savedAudiences.length === 0 ? (
+                      <div style={{ color: '#9ca3af', fontSize: 13, textAlign: 'center', padding: 20 }}>
+                        No saved audiences yet. Select candidates and save for quick access later.
+                      </div>
+                    ) : savedAudiences.map(aud => (
+                      <div key={aud.id} className="sms-audience">
+                        <div>
+                          <div className="sms-audience-name">{aud.name}</div>
+                          <div className="sms-audience-count">{aud.candidateIds.length} recipients</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button className="sms-btn small secondary" onClick={() => loadAudience(aud)}>Load</button>
+                          <button className="sms-btn small danger" onClick={() => deleteAudience(aud.id)}>Ã—</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Summary */}
+                <div className="sms-panel" style={{ marginTop: 16 }}>
+                  <div className="sms-panel-header">ðŸ“Š Selection Summary</div>
+                  <div className="sms-panel-body">
+                    <div style={{ fontSize: 28, fontWeight: 700, textAlign: 'center', color: selectedIds.size > 0 ? '#16a34a' : '#dc2626' }}>
+                      {selectedIds.size}
+                    </div>
+                    <div style={{ textAlign: 'center', color: '#6b7280', marginBottom: 16 }}>recipients selected</div>
+                    
+                    <button 
+                      className="sms-btn primary block"
+                      onClick={() => setActiveSubTab('message')}
+                      disabled={selectedIds.size === 0}
+                    >
+                      Continue to Message â†’
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Write Message */}
+          {activeSubTab === 'message' && (
+            <div className="sms-grid">
+              <div>
+                <div className="sms-panel">
+                  <div className="sms-panel-header">
+                    <span>âœï¸ Write Message</span>
+                    <span style={{ fontSize: 12, color: charCount > 160 ? '#f59e0b' : '#6b7280' }}>
+                      {charCount} chars â€¢ {smsCount} SMS
+                    </span>
+                  </div>
+                  <div className="sms-panel-body">
+                    {/* Templates */}
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', marginBottom: 8 }}>Quick Templates:</div>
+                      <div className="sms-templates">
+                        {MESSAGE_TEMPLATES.map((t, i) => (
+                          <button 
+                            key={i}
+                            className={`sms-template ${message === t.text ? 'active' : ''}`}
+                            onClick={() => setMessage(t.text)}
+                          >
+                            {t.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <input 
+                      className="sms-input"
+                      placeholder="Campaign name (optional)"
+                      value={campaignName}
+                      onChange={e => setCampaignName(e.target.value)}
+                      style={{ marginBottom: 12 }}
+                    />
+
+                    <textarea 
+                      className="sms-textarea"
+                      value={message}
+                      onChange={e => setMessage(e.target.value)}
+                      placeholder="Type your message..."
+                      style={{ minHeight: 150 }}
+                    />
+
+                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>
+                      Variables: <code style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: 4 }}>{'{name}'}</code>
+                    </div>
+
+                    {/* Preview */}
+                    <div className="sms-preview">
+                      <div className="sms-preview-title">ðŸ“± Preview (to {selectedCandidates[0]?.name || 'John'})</div>
+                      <div className="sms-preview-text">
+                        {personalizeMessage(message, selectedCandidates[0] || { id: '1', name: 'John', phone_e164: '+447123456789', status: 'new', source: null, last_called_at: null })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="sms-panel">
+                  <div className="sms-panel-header">ðŸ“‹ Summary</div>
+                  <div className="sms-panel-body">
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ color: '#6b7280' }}>Recipients:</span>
+                        <strong>{selectedIds.size}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ color: '#6b7280' }}>SMS per person:</span>
+                        <strong>{smsCount}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ color: '#6b7280' }}>Total messages:</span>
+                        <strong>{selectedIds.size * smsCount}</strong>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#6b7280' }}>Est. time:</span>
+                        <strong>{Math.ceil((selectedIds.size * sendDelay) / 60)}m</strong>
+                      </div>
+                    </div>
+
+                    <button 
+                      className="sms-btn secondary block"
+                      onClick={() => setActiveSubTab('select')}
+                      style={{ marginBottom: 8 }}
+                    >
+                      â† Back to Selection
+                    </button>
+                    <button 
+                      className="sms-btn primary block"
+                      onClick={() => setActiveSubTab('send')}
+                      disabled={selectedIds.size === 0 || !message.trim()}
+                    >
+                      Continue to Send â†’
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Send */}
+          {activeSubTab === 'send' && (
+            <div className="sms-grid">
+              <div>
+                <div className="sms-panel">
+                  <div className="sms-panel-header">ðŸš€ Send Campaign</div>
+                  <div className="sms-panel-body">
+                    {/* Summary */}
+                    <div style={{ background: '#f9fafb', padding: 16, borderRadius: 8, marginBottom: 16 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, textAlign: 'center' }}>
+                        <div>
+                          <div style={{ fontSize: 24, fontWeight: 700 }}>{selectedIds.size}</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>Recipients</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 24, fontWeight: 700 }}>{smsCount}</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>SMS Each</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 24, fontWeight: 700 }}>{sendDelay}s</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>Delay</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 24, fontWeight: 700 }}>{Math.ceil((selectedIds.size * sendDelay) / 60)}m</div>
+                          <div style={{ fontSize: 11, color: '#6b7280' }}>Est. Time</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {!isSending ? (
+                      <>
+                        <button className="sms-btn primary block" onClick={startSending} disabled={selectedIds.size === 0}>
+                          ðŸ“± Start Sending ({selectedIds.size} recipients)
+                        </button>
+                        <button className="sms-btn secondary block" onClick={() => setActiveSubTab('message')} style={{ marginTop: 8 }}>
+                          â† Back to Message
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="sms-btn secondary block" onClick={() => { pausedRef.current = !pausedRef.current; setIsPausedDisplay(!isPausedDisplay); }}>
+                          {isPausedDisplay ? 'â–¶ï¸ Resume' : 'â¸ï¸ Pause'}
+                        </button>
+                        <button className="sms-btn danger block" onClick={() => { abortRef.current = true; }} style={{ marginTop: 8 }}>
+                          â¹ï¸ Stop
+                        </button>
+                      </>
+                    )}
+
+                    {isSending && (
+                      <div className="sms-progress">
+                        <div className="sms-progress-bar">
+                          <div className="sms-progress-fill" style={{ width: `${((currentIndex + 1) / selectedCandidates.length) * 100}%` }} />
+                        </div>
+                        <div className="sms-progress-stats">
+                          <span>{currentIndex + 1}/{selectedCandidates.length} {isPausedDisplay && '(Paused)'}</span>
+                          <span>âœ“ {sendStats.sent} | âœ— {sendStats.failed} | âŠ˜ {sendStats.skipped}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {sendLog.length > 0 && (
+                      <div className="sms-log">
+                        {sendLog.slice().reverse().slice(0, 30).map((log, i) => (
+                          <div key={i} className={`sms-log-item ${log.status}`}>
+                            <div>
+                              <strong>{log.name}</strong>
+                              <div style={{ fontSize: 11, color: '#6b7280' }}>{log.phone}</div>
+                              {log.error && <div style={{ fontSize: 10, color: '#dc2626' }}>{log.error}</div>}
+                            </div>
+                            <span>{log.status === 'sent' ? 'âœ“' : log.status === 'failed' ? 'âœ—' : 'âŠ˜'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                {/* Gateway Settings */}
+                <div className="sms-panel">
+                  <div className="sms-panel-header">
+                    <span>âš™ï¸ Gateway</span>
+                    <span 
+                      style={{ fontSize: 12, padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
+                        background: gatewayConnected === true ? '#dcfce7' : gatewayConnected === false ? '#fee2e2' : '#f3f4f6',
+                        color: gatewayConnected === true ? '#166534' : gatewayConnected === false ? '#991b1b' : '#6b7280'
+                      }}
+                      onClick={testGateway}
+                    >
+                      {gatewayConnected === true ? 'âœ“ Connected' : gatewayConnected === false ? 'âœ— Offline' : '? Test'}
+                    </span>
+                  </div>
+                  <div className="sms-panel-body">
+                    <input className="sms-input" value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="Gateway URL" style={{ marginBottom: 8 }} />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                      <input className="sms-input" value={gatewayUsername} onChange={e => setGatewayUsername(e.target.value)} placeholder="Username" style={{ marginBottom: 0 }} />
+                      <input className="sms-input" type="password" value={gatewayPassword} onChange={e => setGatewayPassword(e.target.value)} placeholder="Password" style={{ marginBottom: 0 }} />
+                    </div>
+                    <button 
+                      className="sms-btn secondary block"
+                      onClick={saveGatewaySettings}
+                      style={{ background: settingsSaved ? '#dcfce7' : undefined, color: settingsSaved ? '#166534' : undefined }}
+                    >
+                      {settingsSaved ? 'âœ“ Saved!' : 'Save Settings'}
+                    </button>
+                    
+                    <div style={{ marginTop: 12 }}>
+                      <label style={{ fontSize: 12, color: '#6b7280' }}>Delay: {sendDelay}s</label>
+                      <input type="range" min="10" max="120" value={sendDelay} onChange={e => setSendDelay(parseInt(e.target.value))} style={{ width: '100%' }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Test SMS */}
+                <div className="sms-panel" style={{ marginTop: 16 }}>
+                  <div className="sms-panel-header">ðŸ§ª Test SMS</div>
+                  <div className="sms-panel-body">
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input 
+                        className="sms-input"
+                        style={{ flex: 1, marginBottom: 0 }}
+                        placeholder="07123456789"
+                        value={testPhone}
+                        onChange={e => setTestPhone(e.target.value)}
+                      />
+                      <button className="sms-btn purple" onClick={sendTestSMS} disabled={testSending || !testPhone}>
+                        {testSending ? '...' : 'Test'}
+                      </button>
+                    </div>
+                    {testResult && (
+                      <div style={{ marginTop: 10, padding: 10, borderRadius: 6, fontSize: 13, background: testResult.success ? '#dcfce7' : '#fee2e2', color: testResult.success ? '#166534' : '#991b1b' }}>
+                        {testResult.message}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Conversations Tab */}
+      {activeTab === 'conversations' && (
+        <div className="sms-convo-container">
+          <div className="sms-convo-sidebar">
+            <div className="sms-convo-header">
+              <input 
+                className="sms-input"
+                placeholder="ðŸ” Search..."
+                value={convoSearch}
+                onChange={e => setConvoSearch(e.target.value)}
+                style={{ marginBottom: 12 }}
+              />
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {['all', 'needs_action', 'interested', 'handled'].map(f => (
+                  <button 
+                    key={f}
+                    className={`sms-btn small ${convoFilter === f ? 'purple' : 'secondary'}`}
+                    onClick={() => setConvoFilter(f)}
+                  >
+                    {f === 'all' ? `All (${convoStats.total})` : 
+                     f === 'needs_action' ? `ðŸ”” Action (${convoStats.needsAction})` :
+                     f === 'interested' ? `âœ“ Hot (${convoStats.interested})` : 'âœ” Done'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="sms-convo-list">
+              {filteredConversations.length === 0 ? (
+                <div className="sms-empty"><div className="sms-empty-icon">ðŸ’¬</div></div>
+              ) : filteredConversations.map(c => {
+                const cfg = getIntentConfig(c.latestIntent);
+                return (
+                  <div key={c.phone} className={`sms-convo ${selectedConvo?.phone === c.phone ? 'active' : ''}`} onClick={() => setSelectedConvo(c)}>
+                    <div className="sms-convo-avatar">{c.name?.[0]?.toUpperCase() || '?'}</div>
+                    <div className="sms-convo-info">
+                      <div className="sms-convo-name">{c.name || 'Unknown'}</div>
+                      <div className="sms-convo-preview">{c.lastMessage?.message_text?.substring(0, 30)}...</div>
+                    </div>
+                    {c.hasResponse && <span className="sms-convo-badge" style={{ background: cfg.bg, color: cfg.text }}>{cfg.icon}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="sms-detail">
+            {selectedConvo ? (
+              <>
+                <div className="sms-detail-header">
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{selectedConvo.name || 'Unknown'}</div>
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>{selectedConvo.phone}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="sms-btn small secondary" onClick={() => setHandledConvos(prev => { const n = new Set(prev); n.has(selectedConvo.phone) ? n.delete(selectedConvo.phone) : n.add(selectedConvo.phone); return n; })}>
+                      {handledConvos.has(selectedConvo.phone) ? 'â†© Reopen' : 'âœ” Done'}
+                    </button>
+                    <a href={`tel:${selectedConvo.phone}`} className="sms-btn small primary" style={{ textDecoration: 'none' }}>ðŸ“ž Call</a>
+                  </div>
+                </div>
+                <div className="sms-messages">
+                  {selectedConvo.messages.map((m: any) => (
+                    <div key={m.id}>
+                      <div className={`sms-message ${m.direction === 'outbound' ? 'out' : 'in'}`}>
+                        {m.message_text}
+                        <div style={{ fontSize: 10, opacity: .7, marginTop: 4 }}>
+                          {new Date(m.created_at).toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}
+                        </div>
+                      </div>
+                      {m.direction === 'inbound' && m.ai_summary && (
+                        <div className="sms-ai-box">
+                          <strong>ðŸ¤– AI:</strong> {m.ai_summary}
+                          {m.ai_suggested_action && <span> â†’ {m.ai_suggested_action.replace(/_/g, ' ')}</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {selectedConvo.latestIntent && QUICK_REPLIES[selectedConvo.latestIntent] && (
+                  <div className="sms-quick-replies">
+                    {QUICK_REPLIES[selectedConvo.latestIntent].map((r, i) => (
+                      <div key={i} className="sms-quick-reply" onClick={() => setReplyMessage(r)}>{r.substring(0, 40)}...</div>
+                    ))}
+                  </div>
+                )}
+                <div className="sms-reply-box">
+                  <textarea 
+                    className="sms-reply-input"
+                    placeholder="Type reply..."
+                    value={replyMessage}
+                    onChange={e => setReplyMessage(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+                  />
+                  <button className="sms-reply-btn" onClick={sendReply} disabled={sendingReply || !replyMessage.trim()}>
+                    {sendingReply ? '...' : 'â†’'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="sms-empty"><div className="sms-empty-icon">ðŸ‘ˆ</div></div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* History Tab */}
+      {activeTab === 'history' && (
+        <div className="sms-content">
+          <div className="sms-panel">
+            <div className="sms-panel-header">ðŸ“Š Campaign History</div>
+            <div className="sms-panel-body" style={{ padding: 0 }}>
+              {campaigns.length === 0 ? (
+                <div className="sms-empty" style={{ padding: 60 }}><div className="sms-empty-icon">ðŸ“Š</div></div>
+              ) : (
+                <table className="sms-history-table">
+                  <thead><tr><th>Campaign</th><th>Recipients</th><th>Sent</th><th>Status</th><th>Date</th></tr></thead>
+                  <tbody>
+                    {campaigns.map(c => (
+                      <tr key={c.id}>
+                        <td style={{ fontWeight: 500 }}>{c.name}</td>
+                        <td>{c.total_recipients}</td>
+                        <td>{c.sent_count || 0}</td>
+                        <td><span className={`sms-campaign-status ${c.status}`}>{c.status}</span></td>
+                        <td style={{ color: '#6b7280' }}>{new Date(c.started_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+===== src\app\DashboardView.tsx =====
+
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+interface DashboardViewProps {
+  candidates: any[];
+  jobs: any[];
+  onNavigate: (action: string, data?: any) => void;
+}
+
+interface DashboardStats {
+  totalCandidates: number;
+  calledCandidates: number;
+  importedPool: number;
+  gradeACandidates: number;
+  callsToday: number;
+  callsThisWeek: number;
+  pendingProcessing: number;
+  avgEnergyScore: number | null;
+}
+
+interface RecentCall {
+  call_id: string;
+  phone_e164: string;
+  candidate_name: string | null;
+  energy_score: number | null;
+  quality_assessment: string | null;
+  call_summary: string | null;
+  call_time: string;
+  processing_status: string;
+  direction: string;
+  duration_ms: number | null;
+}
+
+interface PipelineCounts {
+  new: number;
+  screening: number;
+  interview: number;
+  offer: number;
+  hired: number;
+}
+
+export default function DashboardView({ candidates, jobs, onNavigate }: DashboardViewProps) {
+  const [stats, setStats] = useState<DashboardStats>({
+    totalCandidates: 0,
+    calledCandidates: 0,
+    importedPool: 0,
+    gradeACandidates: 0,
+    callsToday: 0,
+    callsThisWeek: 0,
+    pendingProcessing: 0,
+    avgEnergyScore: null,
+  });
+  const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
+  const [pipeline, setPipeline] = useState<PipelineCounts>({ new: 0, screening: 0, interview: 0, offer: 0, hired: 0 });
+  const [loading, setLoading] = useState(true);
+
+  const fetchDashboardData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).toISOString();
+
+      // Parallel queries for speed
+      const [
+        totalRes,
+        calledRes,
+        importedRes,
+        gradeARes,
+        callsTodayRes,
+        callsWeekRes,
+        pendingRes,
+        recentCallsRes,
+        pipelineRes,
+        energyRes,
+      ] = await Promise.all([
+        // Total candidates
+        supabase.from('candidates').select('*', { count: 'exact', head: true }),
+        // Called candidates (have been called at least once)
+        supabase.from('candidates').select('*', { count: 'exact', head: true }).not('last_called_at', 'is', null),
+        // Imported pool (never called)
+        supabase.from('candidates').select('*', { count: 'exact', head: true }).is('last_called_at', null),
+        // Grade A candidates from call_history
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).eq('quality_assessment', 'A'),
+        // Calls today
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).gte('call_time', todayStart),
+        // Calls this week
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).gte('call_time', weekStart),
+        // Pending processing
+        supabase.from('call_history').select('*', { count: 'exact', head: true }).eq('processing_status', 'pending'),
+        // Recent calls (last 10)
+        supabase.from('call_history')
+          .select('call_id, phone_e164, candidate_name, energy_score, quality_assessment, call_summary, call_time, processing_status, direction, duration_ms')
+          .order('call_time', { ascending: false })
+          .limit(10),
+        // Pipeline counts - get all candidates with status
+        supabase.from('candidates')
+          .select('status')
+          .not('last_called_at', 'is', null),
+        // Average energy score
+        supabase.from('call_history')
+          .select('energy_score')
+          .not('energy_score', 'is', null)
+          .limit(100),
+      ]);
+
+      // Compute pipeline counts
+      const pipelineCounts: PipelineCounts = { new: 0, screening: 0, interview: 0, offer: 0, hired: 0 };
+      (pipelineRes.data || []).forEach((c: any) => {
+        const s = c.status as keyof PipelineCounts;
+        if (s in pipelineCounts) pipelineCounts[s]++;
+      });
+
+      // Compute average energy
+      const energyScores = (energyRes.data || []).map((r: any) => r.energy_score).filter((s: any) => typeof s === 'number');
+      const avgEnergy = energyScores.length > 0 ? energyScores.reduce((a: number, b: number) => a + b, 0) / energyScores.length : null;
+
+      setStats({
+        totalCandidates: totalRes.count ?? 0,
+        calledCandidates: calledRes.count ?? 0,
+        importedPool: importedRes.count ?? 0,
+        gradeACandidates: gradeARes.count ?? 0,
+        callsToday: callsTodayRes.count ?? 0,
+        callsThisWeek: callsWeekRes.count ?? 0,
+        pendingProcessing: pendingRes.count ?? 0,
+        avgEnergyScore: avgEnergy,
+      });
+
+      setRecentCalls(recentCallsRes.data || []);
+      setPipeline(pipelineCounts);
+    } catch (e) {
+      console.error('Dashboard fetch error:', e);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchDashboardData();
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchDashboardData, 30000);
+    return () => clearInterval(interval);
+  }, [fetchDashboardData]);
+
+  const greeting = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
+
+  const formatDuration = (ms: number | null) => {
+    if (!ms) return 'â€”';
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
+  };
+
+  const formatTimeAgo = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  };
+
+  const gradeColor = (grade: string | null) => {
+    switch (grade) {
+      case 'A': return { bg: '#dcfce7', color: '#15803d', border: '#bbf7d0' };
+      case 'B': return { bg: '#dbeafe', color: '#1d4ed8', border: '#bfdbfe' };
+      case 'C': return { bg: '#fef9c3', color: '#a16207', border: '#fef08a' };
+      case 'D': return { bg: '#fed7aa', color: '#c2410c', border: '#fdba74' };
+      case 'F': return { bg: '#fecaca', color: '#dc2626', border: '#fca5a5' };
+      default: return { bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb' };
+    }
+  };
+
+  const energyColor = (score: number | null) => {
+    if (!score) return '#9ca3af';
+    if (score >= 8) return '#15803d';
+    if (score >= 6) return '#2563eb';
+    if (score >= 4) return '#d97706';
+    return '#dc2626';
+  };
+
+  const processingBadge = (status: string) => {
+    switch (status) {
+      case 'completed': return null;
+      case 'processing': return { label: 'Processing...', bg: '#dbeafe', color: '#2563eb' };
+      case 'pending': return { label: 'Queued', bg: '#fef9c3', color: '#a16207' };
+      case 'failed': return { label: 'Failed', bg: '#fecaca', color: '#dc2626' };
+      case 'no_recording': return { label: 'No recording', bg: '#f3f4f6', color: '#6b7280' };
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto' }}>
+      <style>{`
+        .dash-header { margin-bottom: 28px; }
+        .dash-greeting { font-size: 26px; font-weight: 800; color: #111827; letter-spacing: -0.5px; }
+        .dash-subtitle { font-size: 14px; color: #6b7280; margin-top: 4px; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+        .stat-tile {
+          background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 20px;
+          cursor: pointer; transition: all 0.15s ease;
+          position: relative; overflow: hidden;
+        }
+        .stat-tile:hover { border-color: #c7d2fe; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .stat-tile .accent-bar { position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+        .stat-number { font-size: 32px; font-weight: 800; color: #111827; line-height: 1; }
+        .stat-label { font-size: 12px; font-weight: 600; color: #6b7280; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-detail { font-size: 11px; color: #9ca3af; margin-top: 4px; }
+
+        .dash-grid { display: grid; grid-template-columns: 1fr 340px; gap: 20px; }
+        .dash-section {
+          background: #fff; border: 1px solid #e5e7eb; border-radius: 14px;
+          overflow: hidden;
+        }
+        .section-header {
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 16px 20px; border-bottom: 1px solid #f3f4f6;
+        }
+        .section-title { font-size: 15px; font-weight: 700; color: #111827; display: flex; align-items: center; gap: 8px; }
+        .section-link {
+          font-size: 12px; font-weight: 600; color: #4f46e5; cursor: pointer;
+          text-decoration: none; transition: color 0.15s;
+        }
+        .section-link:hover { color: #3730a3; }
+
+        .call-row {
+          display: flex; align-items: center; gap: 14px; padding: 14px 20px;
+          border-bottom: 1px solid #f9fafb; cursor: pointer; transition: background 0.1s;
+        }
+        .call-row:last-child { border-bottom: none; }
+        .call-row:hover { background: #fafbfc; }
+        .call-avatar {
+          width: 40px; height: 40px; border-radius: 10px; display: flex;
+          align-items: center; justify-content: center; font-weight: 700;
+          font-size: 14px; flex-shrink: 0;
+        }
+        .call-info { flex: 1; min-width: 0; }
+        .call-name { font-size: 13px; font-weight: 600; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .call-phone { font-size: 11px; color: #9ca3af; font-family: 'SF Mono', 'Fira Code', monospace; letter-spacing: 0.3px; }
+        .call-summary { font-size: 11px; color: #6b7280; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+        .call-meta { text-align: right; flex-shrink: 0; }
+        .call-energy { font-size: 22px; font-weight: 800; line-height: 1; }
+        .call-energy-label { font-size: 9px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; }
+        .call-time { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+
+        .grade-badge {
+          display: inline-flex; align-items: center; justify-content: center;
+          width: 26px; height: 26px; border-radius: 7px; font-size: 12px;
+          font-weight: 800; border: 1.5px solid;
+        }
+        .processing-badge {
+          display: inline-block; padding: 2px 8px; border-radius: 6px;
+          font-size: 10px; font-weight: 600;
+        }
+
+        .pipeline-bar { padding: 20px; }
+        .pipeline-stage {
+          display: flex; align-items: center; gap: 12px; padding: 10px 0;
+          border-bottom: 1px solid #f9fafb;
+        }
+        .pipeline-stage:last-child { border-bottom: none; }
+        .pipeline-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .pipeline-label { font-size: 13px; color: #374151; flex: 1; font-weight: 500; }
+        .pipeline-count { font-size: 15px; font-weight: 800; color: #111827; min-width: 30px; text-align: right; }
+        .pipeline-bar-fill {
+          height: 6px; border-radius: 3px; transition: width 0.5s ease;
+        }
+
+        .quick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 16px 20px; }
+        .quick-btn {
+          display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+          border: 1px solid #e5e7eb; border-radius: 10px; cursor: pointer;
+          background: #fff; font-size: 12px; font-weight: 600; color: #374151;
+          transition: all 0.15s;
+        }
+        .quick-btn:hover { background: #f9fafb; border-color: #c7d2fe; color: #4f46e5; }
+        .quick-btn .qicon { font-size: 16px; }
+
+        .empty-calls { padding: 40px 20px; text-align: center; color: #9ca3af; font-size: 13px; }
+
+        @keyframes shimmer {
+          0% { background-position: -200px 0; }
+          100% { background-position: calc(200px + 100%) 0; }
+        }
+        .skeleton {
+          background: linear-gradient(90deg, #f3f4f6 0px, #e5e7eb 40px, #f3f4f6 80px);
+          background-size: 200px 100%;
+          animation: shimmer 1.5s infinite;
+          border-radius: 8px;
+        }
+      `}</style>
+
+      {/* Header */}
+      <div className="dash-header">
+        <div className="dash-greeting">{greeting()}! ðŸ‘‹</div>
+        <div className="dash-subtitle">
+          Here&apos;s your recruitment overview
+          {stats.pendingProcessing > 0 && (
+            <span style={{ marginLeft: 12, padding: '2px 10px', background: '#fef9c3', color: '#a16207', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
+              {stats.pendingProcessing} call{stats.pendingProcessing !== 1 ? 's' : ''} processing
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Stats tiles */}
+      <div className="stats-grid">
+        <div className="stat-tile" onClick={() => onNavigate('call-history')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #4f46e5, #7c3aed)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 60, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number">{stats.callsToday}</div>
+          )}
+          <div className="stat-label">Calls Today</div>
+          <div className="stat-detail">{stats.callsThisWeek} this week</div>
+        </div>
+
+        <div className="stat-tile" onClick={() => onNavigate('candidate-dashboard')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #059669, #10b981)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 40, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number" style={{ color: '#059669' }}>{stats.gradeACandidates}</div>
+          )}
+          <div className="stat-label">Grade A Candidates</div>
+          <div className="stat-detail">
+            {stats.avgEnergyScore !== null ? `Avg energy: ${stats.avgEnergyScore.toFixed(1)}/10` : 'No scores yet'}
+          </div>
+        </div>
+
+        <div className="stat-tile" onClick={() => onNavigate('candidate-dashboard')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #2563eb, #3b82f6)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 50, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number">{stats.calledCandidates}</div>
+          )}
+          <div className="stat-label">Total Called</div>
+          <div className="stat-detail">of {stats.totalCandidates} total candidates</div>
+        </div>
+
+        <div className="stat-tile" onClick={() => onNavigate('imported')}>
+          <div className="accent-bar" style={{ background: 'linear-gradient(90deg, #d97706, #f59e0b)' }} />
+          {loading ? (
+            <div className="skeleton" style={{ width: 50, height: 36, marginBottom: 8 }} />
+          ) : (
+            <div className="stat-number" style={{ color: '#d97706' }}>{stats.importedPool}</div>
+          )}
+          <div className="stat-label">To Contact</div>
+          <div className="stat-detail">Imported, not yet called</div>
+        </div>
+      </div>
+
+      {/* Main grid: Calls + Sidebar */}
+      <div className="dash-grid">
+        {/* Recent Calls */}
+        <div className="dash-section">
+          <div className="section-header">
+            <div className="section-title">ðŸ“ž Recent Calls</div>
+            <span className="section-link" onClick={() => onNavigate('candidate-dashboard')}>View all â†’</span>
+          </div>
+          {loading ? (
+            <div style={{ padding: 20 }}>
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} style={{ display: 'flex', gap: 14, alignItems: 'center', padding: '12px 0' }}>
+                  <div className="skeleton" style={{ width: 40, height: 40, borderRadius: 10 }} />
+                  <div style={{ flex: 1 }}>
+                    <div className="skeleton" style={{ width: 120, height: 14, marginBottom: 6 }} />
+                    <div className="skeleton" style={{ width: 90, height: 10 }} />
+                  </div>
+                  <div className="skeleton" style={{ width: 30, height: 30, borderRadius: 8 }} />
+                </div>
+              ))}
+            </div>
+          ) : recentCalls.length === 0 ? (
+            <div className="empty-calls">
+              <div style={{ fontSize: 32, marginBottom: 8 }}>ðŸ“ž</div>
+              <div>No calls recorded yet</div>
+              <div style={{ fontSize: 11, marginTop: 4 }}>Calls from Dialpad will appear here automatically</div>
+            </div>
+          ) : (
+            recentCalls.map((call) => {
+              const gc = gradeColor(call.quality_assessment);
+              const badge = processingBadge(call.processing_status);
+              const initial = call.candidate_name
+                ? call.candidate_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()
+                : '?';
+              const avatarBg = call.candidate_name
+                ? `hsl(${call.candidate_name.charCodeAt(0) * 7 % 360}, 55%, 55%)`
+                : '#d1d5db';
+
+              return (
+                <div key={call.call_id} className="call-row" onClick={() => onNavigate('candidate-dashboard')}>
+                  <div className="call-avatar" style={{ background: avatarBg, color: '#fff' }}>
+                    {initial}
+                  </div>
+                  <div className="call-info">
+                    <div className="call-name">
+                      {call.candidate_name || 'Unknown'}
+                      {call.quality_assessment && (
+                        <span
+                          className="grade-badge"
+                          style={{ background: gc.bg, color: gc.color, borderColor: gc.border, marginLeft: 8 }}
+                        >
+                          {call.quality_assessment}
+                        </span>
+                      )}
+                      {badge && (
+                        <span className="processing-badge" style={{ background: badge.bg, color: badge.color, marginLeft: 6 }}>
+                          {badge.label}
+                        </span>
+                      )}
+                    </div>
+                    <div className="call-phone">
+                      {call.phone_e164 || 'â€”'}
+                      {call.duration_ms ? ` Â· ${formatDuration(call.duration_ms)}` : ''}
+                    </div>
+                    {call.call_summary && (
+                      <div className="call-summary">{call.call_summary}</div>
+                    )}
+                  </div>
+                  <div className="call-meta">
+                    {call.energy_score ? (
+                      <>
+                        <div className="call-energy" style={{ color: energyColor(call.energy_score) }}>
+                          {call.energy_score}
+                        </div>
+                        <div className="call-energy-label">Energy</div>
+                      </>
+                    ) : (
+                      <div style={{ color: '#d1d5db', fontSize: 13 }}>â€”</div>
+                    )}
+                    <div className="call-time">{formatTimeAgo(call.call_time)}</div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Right sidebar */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Pipeline */}
+          <div className="dash-section">
+            <div className="section-header">
+              <div className="section-title">ðŸ“Š Pipeline</div>
+              <span className="section-link" onClick={() => onNavigate('candidates')}>View all â†’</span>
+            </div>
+            <div className="pipeline-bar">
+              {[
+                { key: 'new', label: 'New', color: '#6366f1', count: pipeline.new },
+                { key: 'screening', label: 'Screening', color: '#f59e0b', count: pipeline.screening },
+                { key: 'interview', label: 'Interview', color: '#3b82f6', count: pipeline.interview },
+                { key: 'offer', label: 'Offer', color: '#8b5cf6', count: pipeline.offer },
+                { key: 'hired', label: 'Hired', color: '#10b981', count: pipeline.hired },
+              ].map((stage) => {
+                const total = pipeline.new + pipeline.screening + pipeline.interview + pipeline.offer + pipeline.hired;
+                const pct = total > 0 ? (stage.count / total) * 100 : 0;
+                return (
+                  <div key={stage.key} className="pipeline-stage" onClick={() => onNavigate('candidates', { status: stage.key })}>
+                    <div className="pipeline-dot" style={{ background: stage.color }} />
+                    <div className="pipeline-label">{stage.label}</div>
+                    <div className="pipeline-count">{stage.count}</div>
+                    <div style={{ width: 60 }}>
+                      <div style={{ background: '#f3f4f6', borderRadius: 3, height: 6, overflow: 'hidden' }}>
+                        <div className="pipeline-bar-fill" style={{ width: `${pct}%`, background: stage.color }} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="dash-section">
+            <div className="section-header">
+              <div className="section-title">ðŸš€ Quick Actions</div>
+            </div>
+            <div className="quick-grid">
+              <div className="quick-btn" onClick={() => onNavigate('candidate-dashboard')}>
+                <span className="qicon">ðŸ“ž</span> Call History
+              </div>
+              <div className="quick-btn" onClick={() => onNavigate('candidates')}>
+                <span className="qicon">ðŸ‘¥</span> Pipeline
+              </div>
+              <div className="quick-btn" onClick={() => onNavigate('imported')}>
+                <span className="qicon">ðŸ“¥</span> Import CSV
+              </div>
+              <div className="quick-btn" onClick={() => onNavigate('sms')}>
+                <span className="qicon">ðŸ“±</span> SMS Campaign
+              </div>
+              <div className="quick-btn" onClick={() => onNavigate('whatsapp')}>
+                <span className="qicon">ðŸ’¬</span> WhatsApp
+              </div>
+              <div className="quick-btn" onClick={() => onNavigate('reports')}>
+                <span className="qicon">ðŸ“ˆ</span> Reports
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

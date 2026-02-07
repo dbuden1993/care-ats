@@ -40,62 +40,59 @@ export default function ImportedCandidatesView({ onSelectCandidate, onOpenImport
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
-  // FETCH IMPORTED CANDIDATES - those with no last_called_at
   const fetchCandidates = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      console.log('Fetching imported candidates (last_called_at IS NULL)...');
-      
-      // Direct query for candidates with NULL last_called_at
       const { data, error: fetchError } = await supabase
         .from('candidates')
         .select('*')
         .is('last_called_at', null)
         .order('created_at', { ascending: false });
-      
+
       if (fetchError) {
-        console.error('Supabase error:', fetchError);
         setError(fetchError.message);
         return;
       }
-      
-      console.log('Imported candidates found:', data?.length || 0);
       setCandidates(data || []);
     } catch (e: any) {
-      console.error('Error:', e);
       setError(e.message || 'Failed to load candidates');
     }
     setLoading(false);
   }, []);
 
-  useEffect(() => { 
-    fetchCandidates(); 
-  }, [fetchCandidates]);
+  useEffect(() => { fetchCandidates(); }, [fetchCandidates]);
 
-  // Get unique sources
+  // Unique sources for filter
   const sources = useMemo(() => {
     const s = new Set(candidates.map(c => c.source).filter(Boolean));
     return Array.from(s).sort();
   }, [candidates]);
 
-  // Filter candidates by search and source
+  // Stats
+  const stats = useMemo(() => {
+    const withDriver = candidates.filter(c => c.driver === 'Yes').length;
+    const withDBS = candidates.filter(c => c.dbs_update_service === 'Yes').length;
+    const withTraining = candidates.filter(c => c.mandatory_training === 'Yes').length;
+    const withRoles = candidates.filter(c => Array.isArray(c.roles) && c.roles.length > 0).length;
+    return { total: candidates.length, withDriver, withDBS, withTraining, withRoles };
+  }, [candidates]);
+
+  // Filter
   const filteredCandidates = useMemo(() => {
     let result = [...candidates];
-    
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(c =>
         c.name?.toLowerCase().includes(q) ||
         c.phone_e164?.includes(q) ||
-        c.source?.toLowerCase().includes(q)
+        c.source?.toLowerCase().includes(q) ||
+        (Array.isArray(c.roles) && c.roles.some(r => r.toLowerCase().includes(q)))
       );
     }
-    
     if (sourceFilter !== 'all') {
       result = result.filter(c => c.source === sourceFilter);
     }
-    
     return result;
   }, [candidates, searchQuery, sourceFilter]);
 
@@ -119,7 +116,6 @@ export default function ImportedCandidatesView({ onSelectCandidate, onOpenImport
     setSelected(newSelected);
   };
 
-  // Bulk delete
   const handleBulkDelete = async () => {
     if (!selected.size || !confirm(`Delete ${selected.size} candidates? This cannot be undone.`)) return;
     try {
@@ -132,7 +128,6 @@ export default function ImportedCandidatesView({ onSelectCandidate, onOpenImport
     }
   };
 
-  // Mark as called
   const handleMarkAsCalled = async () => {
     if (!selected.size) return;
     try {
@@ -148,7 +143,6 @@ export default function ImportedCandidatesView({ onSelectCandidate, onOpenImport
     }
   };
 
-  // Start WhatsApp campaign
   const handleStartCampaign = () => {
     const selectedCandidates = filteredCandidates.filter(c => selected.has(c.id));
     if (selectedCandidates.length === 0) {
@@ -161,94 +155,663 @@ export default function ImportedCandidatesView({ onSelectCandidate, onOpenImport
   };
 
   const formatPhone = (phone: string) => {
-    if (!phone) return '-';
+    if (!phone) return '—';
     if (phone.startsWith('+44') && phone.length >= 12) {
-      return `+44 ${phone.slice(3, 7)} ${phone.slice(7, 10)} ${phone.slice(10)}`;
+      return `0${phone.slice(3, 7)} ${phone.slice(7, 10)} ${phone.slice(10)}`;
     }
     return phone;
   };
 
   const formatDate = (d: string) => {
-    if (!d) return '-';
+    if (!d) return '—';
     return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   };
 
+  const timeAgo = (d: string) => {
+    if (!d) return '';
+    const now = new Date();
+    const date = new Date(d);
+    const diffDays = Math.floor((now.getTime() - date.getTime()) / 86400000);
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays}d ago`;
+    if (diffDays < 30) return `${Math.ceil(diffDays / 7)}w ago`;
+    return formatDate(d);
+  };
+
+  const getAvatarColor = (name: string) => {
+    const colors = [
+      '#6366f1', '#ec4899', '#14b8a6', '#f59e0b', '#3b82f6', '#10b981',
+      '#8b5cf6', '#ef4444', '#06b6d4', '#84cc16'
+    ];
+    return colors[(name?.charCodeAt(0) || 0) % colors.length];
+  };
+
+  const getInitials = (name: string) => {
+    if (!name) return '?';
+    return name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+  };
+
   return (
-    <div style={{ padding: 24, height: '100%', display: 'flex', flexDirection: 'column', background: '#f9fafb' }}>
+    <div className="iv-container">
+      <style>{`
+        .iv-container {
+          padding: 24px 28px;
+          min-height: 100vh;
+          background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+        }
+
+        /* Header */
+        .iv-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 24px;
+        }
+        .iv-header-left {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+        }
+        .iv-title {
+          font-size: 26px;
+          font-weight: 800;
+          color: #111827;
+          letter-spacing: -0.5px;
+          margin: 0;
+        }
+        .iv-count-badge {
+          padding: 4px 14px;
+          background: #e0e7ff;
+          color: #4338ca;
+          border-radius: 20px;
+          font-size: 13px;
+          font-weight: 700;
+        }
+        .iv-header-actions {
+          display: flex;
+          gap: 10px;
+        }
+        .iv-btn {
+          padding: 10px 18px;
+          border-radius: 10px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          border: none;
+        }
+        .iv-btn-outline {
+          background: #fff;
+          border: 1px solid #d1d5db;
+          color: #374151;
+        }
+        .iv-btn-outline:hover {
+          background: #f9fafb;
+          border-color: #9ca3af;
+        }
+        .iv-btn-primary {
+          background: #4f46e5;
+          color: #fff;
+        }
+        .iv-btn-primary:hover {
+          background: #4338ca;
+        }
+
+        /* Stats */
+        .iv-stats {
+          display: grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 14px;
+          margin-bottom: 24px;
+        }
+        .iv-stat {
+          background: #fff;
+          border: 1px solid #e5e7eb;
+          border-radius: 14px;
+          padding: 18px 20px;
+          position: relative;
+          overflow: hidden;
+          transition: all 0.15s ease;
+        }
+        .iv-stat:hover {
+          border-color: #c7d2fe;
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+        }
+        .iv-stat-bar {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 3px;
+        }
+        .iv-stat-value {
+          font-size: 28px;
+          font-weight: 800;
+          color: #111827;
+          line-height: 1;
+        }
+        .iv-stat-label {
+          font-size: 11px;
+          font-weight: 600;
+          color: #6b7280;
+          margin-top: 6px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        /* Error */
+        .iv-error {
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          border-radius: 10px;
+          padding: 14px 18px;
+          margin-bottom: 20px;
+          color: #dc2626;
+          font-size: 14px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        /* Filters */
+        .iv-toolbar {
+          display: flex;
+          gap: 12px;
+          margin-bottom: 16px;
+          align-items: center;
+        }
+        .iv-search {
+          flex: 1;
+          position: relative;
+        }
+        .iv-search-icon {
+          position: absolute;
+          left: 14px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: #9ca3af;
+          font-size: 16px;
+          pointer-events: none;
+        }
+        .iv-search input {
+          width: 100%;
+          padding: 11px 14px 11px 40px;
+          border: 2px solid #e5e7eb;
+          border-radius: 10px;
+          font-size: 14px;
+          background: #fff;
+          transition: all 0.15s;
+          box-sizing: border-box;
+        }
+        .iv-search input:focus {
+          outline: none;
+          border-color: #4f46e5;
+          box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+        .iv-select {
+          padding: 11px 14px;
+          border: 2px solid #e5e7eb;
+          border-radius: 10px;
+          font-size: 13px;
+          font-weight: 500;
+          background: #fff;
+          cursor: pointer;
+          min-width: 180px;
+        }
+        .iv-select:focus {
+          outline: none;
+          border-color: #4f46e5;
+        }
+
+        /* Bulk Action Bar */
+        .iv-bulk-bar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          background: linear-gradient(135deg, #312e81 0%, #4338ca 100%);
+          color: #fff;
+          padding: 14px 22px;
+          border-radius: 14px;
+          margin-bottom: 16px;
+          box-shadow: 0 4px 16px rgba(67, 56, 202, 0.25);
+          animation: ivSlideIn 0.2s ease;
+        }
+        @keyframes ivSlideIn {
+          from { transform: translateY(-8px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+        .iv-bulk-left {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+        }
+        .iv-bulk-count {
+          font-size: 22px;
+          font-weight: 800;
+          line-height: 1;
+        }
+        .iv-bulk-label {
+          font-size: 13px;
+          opacity: 0.9;
+        }
+        .iv-bulk-right {
+          display: flex;
+          gap: 8px;
+        }
+        .iv-bulk-btn {
+          padding: 9px 16px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          transition: all 0.15s;
+        }
+        .iv-bulk-btn-wa {
+          background: #25d366;
+          color: #fff;
+        }
+        .iv-bulk-btn-wa:hover { background: #1ebe57; }
+        .iv-bulk-btn-ghost {
+          background: rgba(255,255,255,0.15);
+          color: #fff;
+        }
+        .iv-bulk-btn-ghost:hover { background: rgba(255,255,255,0.25); }
+        .iv-bulk-btn-clear {
+          background: transparent;
+          border: 1px solid rgba(255,255,255,0.3);
+          color: #fff;
+        }
+        .iv-bulk-btn-clear:hover { background: rgba(255,255,255,0.1); }
+        .iv-bulk-select-all {
+          background: rgba(255,255,255,0.2);
+          border: none;
+          padding: 4px 12px;
+          border-radius: 6px;
+          color: #fff;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 500;
+        }
+        .iv-bulk-select-all:hover { background: rgba(255,255,255,0.3); }
+
+        /* Table */
+        .iv-table-wrap {
+          background: #fff;
+          border: 1px solid #e5e7eb;
+          border-radius: 14px;
+          overflow: hidden;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .iv-table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        .iv-table thead th {
+          padding: 14px 18px;
+          text-align: left;
+          border-bottom: 2px solid #f3f4f6;
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: #6b7280;
+          background: #fafbfc;
+          white-space: nowrap;
+        }
+        .iv-table thead th:first-child {
+          width: 44px;
+          text-align: center;
+        }
+        .iv-table tbody tr {
+          cursor: pointer;
+          transition: background 0.1s;
+        }
+        .iv-table tbody tr:hover {
+          background: #f8faff;
+        }
+        .iv-table tbody tr.iv-row-selected {
+          background: #eef2ff;
+        }
+        .iv-table tbody td {
+          padding: 14px 18px;
+          border-bottom: 1px solid #f3f4f6;
+          font-size: 13px;
+          color: #374151;
+          vertical-align: middle;
+        }
+        .iv-table tbody td:first-child {
+          text-align: center;
+        }
+        .iv-table tbody tr:last-child td {
+          border-bottom: none;
+        }
+
+        /* Table cells */
+        .iv-cell-name {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .iv-avatar {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-weight: 700;
+          font-size: 13px;
+          flex-shrink: 0;
+        }
+        .iv-name-text {
+          font-weight: 600;
+          color: #111827;
+          font-size: 14px;
+        }
+        .iv-cell-phone {
+          font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+          font-size: 12px;
+          color: #6b7280;
+          letter-spacing: 0.3px;
+        }
+        .iv-role-tag {
+          display: inline-block;
+          padding: 3px 10px;
+          background: #e0e7ff;
+          color: #3730a3;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 600;
+          margin-right: 4px;
+          margin-bottom: 2px;
+        }
+        .iv-role-more {
+          display: inline-block;
+          padding: 3px 8px;
+          background: #f3f4f6;
+          color: #6b7280;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 500;
+        }
+        .iv-source-tag {
+          display: inline-block;
+          padding: 4px 10px;
+          background: #f3f4f6;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 500;
+          color: #4b5563;
+          max-width: 160px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .iv-date {
+          font-size: 12px;
+          color: #6b7280;
+        }
+        .iv-date-sub {
+          font-size: 10px;
+          color: #9ca3af;
+          margin-top: 2px;
+        }
+        .iv-compliance-icons {
+          display: flex;
+          gap: 6px;
+        }
+        .iv-compliance-icon {
+          width: 28px;
+          height: 28px;
+          border-radius: 7px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+        }
+        .iv-compliance-yes {
+          background: #d1fae5;
+        }
+        .iv-compliance-no {
+          background: #f3f4f6;
+          opacity: 0.4;
+        }
+        .iv-checkbox {
+          width: 18px;
+          height: 18px;
+          accent-color: #4f46e5;
+          cursor: pointer;
+        }
+
+        /* Pagination */
+        .iv-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 14px 20px;
+          border-top: 1px solid #f3f4f6;
+          background: #fafbfc;
+        }
+        .iv-page-info {
+          font-size: 13px;
+          color: #6b7280;
+        }
+        .iv-page-buttons {
+          display: flex;
+          gap: 6px;
+        }
+        .iv-page-btn {
+          padding: 8px 14px;
+          border: 1px solid #e5e7eb;
+          background: #fff;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 500;
+          cursor: pointer;
+          color: #374151;
+          transition: all 0.15s;
+        }
+        .iv-page-btn:hover:not(:disabled) {
+          border-color: #c7d2fe;
+          background: #f5f3ff;
+          color: #4f46e5;
+        }
+        .iv-page-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+        .iv-page-btn-active {
+          background: #4f46e5;
+          border-color: #4f46e5;
+          color: #fff;
+        }
+
+        /* Empty */
+        .iv-empty {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 80px 40px;
+          text-align: center;
+        }
+        .iv-empty-icon {
+          font-size: 56px;
+          margin-bottom: 16px;
+          opacity: 0.4;
+        }
+        .iv-empty-title {
+          font-size: 20px;
+          font-weight: 700;
+          color: #111827;
+          margin: 0 0 8px;
+        }
+        .iv-empty-text {
+          font-size: 14px;
+          color: #6b7280;
+          margin: 0 0 24px;
+        }
+
+        /* Loading */
+        @keyframes ivShimmer {
+          0% { background-position: -200px 0; }
+          100% { background-position: calc(200px + 100%) 0; }
+        }
+        .iv-skeleton {
+          background: linear-gradient(90deg, #f3f4f6 0px, #e5e7eb 40px, #f3f4f6 80px);
+          background-size: 200px 100%;
+          animation: ivShimmer 1.5s infinite;
+          border-radius: 8px;
+        }
+
+        /* Filter result text */
+        .iv-filter-info {
+          font-size: 12px;
+          color: #9ca3af;
+          margin-bottom: 12px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .iv-filter-clear {
+          color: #4f46e5;
+          cursor: pointer;
+          font-weight: 600;
+        }
+        .iv-filter-clear:hover {
+          text-decoration: underline;
+        }
+
+        @media (max-width: 1100px) {
+          .iv-stats { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (max-width: 768px) {
+          .iv-stats { grid-template-columns: repeat(2, 1fr); }
+          .iv-toolbar { flex-wrap: wrap; }
+        }
+      `}</style>
+
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <h1 style={{ margin: 0, fontSize: 24 }}>📥 Imported Candidates</h1>
-          <span style={{ background: '#e0e7ff', color: '#3730a3', padding: '4px 12px', borderRadius: 16, fontSize: 14, fontWeight: 600 }}>
-            {candidates.length} total
-          </span>
+      <div className="iv-header">
+        <div className="iv-header-left">
+          <h1 className="iv-title">Imported Pool</h1>
+          <span className="iv-count-badge">{stats.total} candidates</span>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={fetchCandidates} style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
-            🔄 Refresh
+        <div className="iv-header-actions">
+          <button className="iv-btn iv-btn-outline" onClick={fetchCandidates}>
+            ↻ Refresh
           </button>
-          <button onClick={onOpenImport} style={{ padding: '10px 16px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontWeight: 500 }}>
-            ➕ Import More
+          <button className="iv-btn iv-btn-primary" onClick={onOpenImport}>
+            + Import CSV
           </button>
         </div>
       </div>
 
-      {/* Info Banner */}
-      <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: 12, marginBottom: 16, color: '#1e40af', fontSize: 14 }}>
-        ℹ️ These are candidates imported from CSV/CV who haven't been called via Dialpad yet. Select candidates to start a WhatsApp campaign.
+      {/* Stats */}
+      <div className="iv-stats">
+        <div className="iv-stat">
+          <div className="iv-stat-bar" style={{ background: 'linear-gradient(90deg, #4f46e5, #7c3aed)' }} />
+          <div className="iv-stat-value">{stats.total}</div>
+          <div className="iv-stat-label">Total Pool</div>
+        </div>
+        <div className="iv-stat">
+          <div className="iv-stat-bar" style={{ background: 'linear-gradient(90deg, #06b6d4, #22d3ee)' }} />
+          <div className="iv-stat-value">{stats.withRoles}</div>
+          <div className="iv-stat-label">With Roles</div>
+        </div>
+        <div className="iv-stat">
+          <div className="iv-stat-bar" style={{ background: 'linear-gradient(90deg, #10b981, #34d399)' }} />
+          <div className="iv-stat-value">{stats.withDriver}</div>
+          <div className="iv-stat-label">Drivers</div>
+        </div>
+        <div className="iv-stat">
+          <div className="iv-stat-bar" style={{ background: 'linear-gradient(90deg, #3b82f6, #60a5fa)' }} />
+          <div className="iv-stat-value">{stats.withDBS}</div>
+          <div className="iv-stat-label">DBS Checked</div>
+        </div>
+        <div className="iv-stat">
+          <div className="iv-stat-bar" style={{ background: 'linear-gradient(90deg, #f59e0b, #fbbf24)' }} />
+          <div className="iv-stat-value">{sources.length}</div>
+          <div className="iv-stat-label">Sources</div>
+        </div>
       </div>
 
-      {/* Error display */}
+      {/* Error */}
       {error && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: 12, marginBottom: 16, color: '#dc2626' }}>
-          ❌ Error: {error}
+        <div className="iv-error">
+          <span>✕</span> {error}
         </div>
       )}
 
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-        <input
-          type="text"
-          placeholder="Search by name, phone, source..."
-          value={searchQuery}
-          onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
-          style={{ flex: 1, padding: 10, border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14 }}
-        />
-        <select 
-          value={sourceFilter} 
+      {/* Toolbar */}
+      <div className="iv-toolbar">
+        <div className="iv-search">
+          <span className="iv-search-icon">🔍</span>
+          <input
+            type="text"
+            placeholder="Search by name, phone, role, or source..."
+            value={searchQuery}
+            onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
+          />
+        </div>
+        <select
+          className="iv-select"
+          value={sourceFilter}
           onChange={e => { setSourceFilter(e.target.value); setPage(1); }}
-          style={{ padding: 10, border: '1px solid #d1d5db', borderRadius: 8, minWidth: 200 }}
         >
           <option value="all">All Sources ({sources.length})</option>
           {sources.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
 
-      {/* Bulk Actions */}
+      {/* Filter info */}
+      {(searchQuery || sourceFilter !== 'all') && (
+        <div className="iv-filter-info">
+          Showing {filteredCandidates.length} of {candidates.length} candidates
+          <span className="iv-filter-clear" onClick={() => { setSearchQuery(''); setSourceFilter('all'); }}>
+            Clear filters
+          </span>
+        </div>
+      )}
+
+      {/* Bulk Action Bar */}
       {selected.size > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#1e40af', color: '#fff', padding: '12px 20px', borderRadius: 10, marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 20, fontWeight: 700 }}>{selected.size}</span> selected
-            {selected.size < filteredCandidates.length && (
-              <button 
-                onClick={() => setSelected(new Set(filteredCandidates.map(c => c.id)))}
-                style={{ background: 'rgba(255,255,255,0.2)', border: 'none', padding: '4px 12px', borderRadius: 6, color: '#fff', cursor: 'pointer' }}
-              >
-                Select all {filteredCandidates.length}
-              </button>
-            )}
+        <div className="iv-bulk-bar">
+          <div className="iv-bulk-left">
+            <div className="iv-bulk-count">{selected.size}</div>
+            <div>
+              <div className="iv-bulk-label">selected</div>
+              {selected.size < filteredCandidates.length && (
+                <button
+                  className="iv-bulk-select-all"
+                  onClick={() => setSelected(new Set(filteredCandidates.map(c => c.id)))}
+                >
+                  Select all {filteredCandidates.length}
+                </button>
+              )}
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={handleStartCampaign} style={{ padding: '8px 16px', background: '#25d366', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer', fontWeight: 500 }}>
+          <div className="iv-bulk-right">
+            <button className="iv-bulk-btn iv-bulk-btn-wa" onClick={handleStartCampaign}>
               💬 WhatsApp Campaign
             </button>
-            <button onClick={handleMarkAsCalled} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer' }}>
-              ✅ Mark as Called
+            <button className="iv-bulk-btn iv-bulk-btn-ghost" onClick={handleMarkAsCalled}>
+              ✓ Mark Called
             </button>
-            <button onClick={handleBulkDelete} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer' }}>
-              🗑️ Delete
+            <button className="iv-bulk-btn iv-bulk-btn-ghost" onClick={handleBulkDelete}>
+              🗑 Delete
             </button>
-            <button onClick={() => setSelected(new Set())} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 8, color: '#fff', cursor: 'pointer' }}>
+            <button className="iv-bulk-btn iv-bulk-btn-clear" onClick={() => setSelected(new Set())}>
               ✕ Clear
             </button>
           </div>
@@ -256,89 +819,198 @@ export default function ImportedCandidatesView({ onSelectCandidate, onOpenImport
       )}
 
       {/* Table */}
-      <div style={{ flex: 1, overflow: 'auto', background: '#fff', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+      <div className="iv-table-wrap">
         {loading ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 64, color: '#6b7280' }}>
-            Loading candidates...
+          <div style={{ padding: 24 }}>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
+              <div key={i} style={{ display: 'flex', gap: 14, alignItems: 'center', padding: '14px 0', borderBottom: '1px solid #f3f4f6' }}>
+                <div className="iv-skeleton" style={{ width: 18, height: 18 }} />
+                <div className="iv-skeleton" style={{ width: 36, height: 36, borderRadius: 10 }} />
+                <div style={{ flex: 1 }}>
+                  <div className="iv-skeleton" style={{ width: 140, height: 14, marginBottom: 6 }} />
+                  <div className="iv-skeleton" style={{ width: 100, height: 10 }} />
+                </div>
+                <div className="iv-skeleton" style={{ width: 80, height: 24, borderRadius: 6 }} />
+                <div className="iv-skeleton" style={{ width: 70, height: 14 }} />
+              </div>
+            ))}
           </div>
         ) : candidates.length === 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 64, color: '#6b7280' }}>
-            <div style={{ fontSize: 56, marginBottom: 16 }}>📭</div>
-            <h3 style={{ margin: '0 0 8px', color: '#111' }}>No imported candidates</h3>
-            <p style={{ margin: '0 0 24px' }}>Import candidates from CSV to build your talent pool.</p>
-            <button onClick={onOpenImport} style={{ padding: '10px 20px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
-              📥 Import Candidates
+          <div className="iv-empty">
+            <div className="iv-empty-icon">📭</div>
+            <h3 className="iv-empty-title">No imported candidates</h3>
+            <p className="iv-empty-text">Import candidates from CSV to build your talent pool and start outreach.</p>
+            <button className="iv-btn iv-btn-primary" onClick={onOpenImport}>
+              + Import Candidates
             </button>
           </div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: '#f9fafb' }}>
-                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', width: 40 }}>
-                  <input type="checkbox" checked={selected.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={handleSelectAll} />
-                </th>
-                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Name</th>
-                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Phone</th>
-                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Roles</th>
-                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Source</th>
-                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Imported</th>
-                <th style={{ padding: '12px 16px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', fontWeight: 600, fontSize: 11, textTransform: 'uppercase', color: '#6b7280' }}>Info</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedCandidates.map(c => (
-                <tr 
-                  key={c.id} 
-                  style={{ cursor: 'pointer', background: selected.has(c.id) ? '#eff6ff' : 'transparent' }}
-                  onClick={() => onSelectCandidate(c)}
-                >
-                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }} onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)} />
-                  </td>
-                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
-                    <strong style={{ color: '#111' }}>{c.name || 'Unknown'}</strong>
-                  </td>
-                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontFamily: 'monospace', fontSize: 12 }}>
-                    {formatPhone(c.phone_e164)}
-                  </td>
-                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
-                    {Array.isArray(c.roles) && c.roles.length > 0 ? (
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {c.roles.slice(0, 2).map((r, i) => (
-                          <span key={i} style={{ padding: '2px 8px', background: '#e0e7ff', color: '#3730a3', borderRadius: 4, fontSize: 11 }}>{r}</span>
-                        ))}
-                        {c.roles.length > 2 && <span style={{ padding: '2px 6px', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, fontSize: 11 }}>+{c.roles.length - 2}</span>}
-                      </div>
-                    ) : '-'}
-                  </td>
-                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
-                    <span style={{ padding: '4px 8px', background: '#f3f4f6', borderRadius: 4, fontSize: 11 }}>
-                      {c.source ? (c.source.length > 25 ? c.source.slice(0, 25) + '...' : c.source) : 'Import'}
-                    </span>
-                  </td>
-                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', color: '#6b7280', fontSize: 12 }}>
-                    {formatDate(c.created_at)}
-                  </td>
-                  <td style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', fontSize: 14 }}>
-                    {c.driver === 'Yes' && <span title="Driver">🚗</span>}
-                    {c.dbs_update_service === 'Yes' && <span title="DBS">✅</span>}
-                    {c.mandatory_training === 'Yes' && <span title="Training">📚</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, borderTop: '1px solid #e5e7eb', background: '#f9fafb' }}>
-            <button disabled={page === 1} onClick={() => setPage(1)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === 1 ? 'not-allowed' : 'pointer', opacity: page === 1 ? 0.5 : 1 }}>««</button>
-            <button disabled={page === 1} onClick={() => setPage(p => p - 1)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === 1 ? 'not-allowed' : 'pointer', opacity: page === 1 ? 0.5 : 1 }}>‹ Prev</button>
-            <span style={{ padding: '0 16px', color: '#6b7280', fontSize: 13 }}>Page {page} of {totalPages} ({filteredCandidates.length} total)</span>
-            <button disabled={page === totalPages} onClick={() => setPage(p => p + 1)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === totalPages ? 'not-allowed' : 'pointer', opacity: page === totalPages ? 0.5 : 1 }}>Next ›</button>
-            <button disabled={page === totalPages} onClick={() => setPage(totalPages)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, cursor: page === totalPages ? 'not-allowed' : 'pointer', opacity: page === totalPages ? 0.5 : 1 }}>»»</button>
+        ) : filteredCandidates.length === 0 ? (
+          <div className="iv-empty">
+            <div className="iv-empty-icon">🔍</div>
+            <h3 className="iv-empty-title">No results</h3>
+            <p className="iv-empty-text">No candidates match &ldquo;{searchQuery}&rdquo;. Try a different search.</p>
           </div>
+        ) : (
+          <>
+            <table className="iv-table">
+              <thead>
+                <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      className="iv-checkbox"
+                      checked={selected.size === filteredCandidates.length && filteredCandidates.length > 0}
+                      onChange={handleSelectAll}
+                    />
+                  </th>
+                  <th>Candidate</th>
+                  <th>Phone</th>
+                  <th>Roles</th>
+                  <th>Source</th>
+                  <th>Imported</th>
+                  <th>Compliance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedCandidates.map(c => {
+                  const isSelected = selected.has(c.id);
+                  return (
+                    <tr
+                      key={c.id}
+                      className={isSelected ? 'iv-row-selected' : ''}
+                      onClick={() => onSelectCandidate(c)}
+                    >
+                      <td onClick={e => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className="iv-checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(c.id)}
+                        />
+                      </td>
+                      <td>
+                        <div className="iv-cell-name">
+                          <div className="iv-avatar" style={{ background: getAvatarColor(c.name || '') }}>
+                            {getInitials(c.name)}
+                          </div>
+                          <span className="iv-name-text">{c.name || 'Unknown'}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="iv-cell-phone">{formatPhone(c.phone_e164)}</span>
+                      </td>
+                      <td>
+                        {Array.isArray(c.roles) && c.roles.length > 0 ? (
+                          <div>
+                            {c.roles.slice(0, 2).map((r, i) => (
+                              <span key={i} className="iv-role-tag">{r}</span>
+                            ))}
+                            {c.roles.length > 2 && (
+                              <span className="iv-role-more">+{c.roles.length - 2}</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ color: '#d1d5db' }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className="iv-source-tag">
+                          {c.source ? (c.source.length > 22 ? c.source.slice(0, 22) + '…' : c.source) : 'Import'}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="iv-date">{timeAgo(c.created_at)}</div>
+                        <div className="iv-date-sub">{formatDate(c.created_at)}</div>
+                      </td>
+                      <td>
+                        <div className="iv-compliance-icons">
+                          <div
+                            className={`iv-compliance-icon ${c.driver === 'Yes' ? 'iv-compliance-yes' : 'iv-compliance-no'}`}
+                            title={`Driver: ${c.driver || 'Unknown'}`}
+                          >
+                            🚗
+                          </div>
+                          <div
+                            className={`iv-compliance-icon ${c.dbs_update_service === 'Yes' ? 'iv-compliance-yes' : 'iv-compliance-no'}`}
+                            title={`DBS: ${c.dbs_update_service || 'Unknown'}`}
+                          >
+                            ✓
+                          </div>
+                          <div
+                            className={`iv-compliance-icon ${c.mandatory_training === 'Yes' ? 'iv-compliance-yes' : 'iv-compliance-no'}`}
+                            title={`Training: ${c.mandatory_training || 'Unknown'}`}
+                          >
+                            📚
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="iv-pagination">
+                <div className="iv-page-info">
+                  Page {page} of {totalPages} · {filteredCandidates.length} candidates
+                </div>
+                <div className="iv-page-buttons">
+                  <button
+                    className="iv-page-btn"
+                    disabled={page === 1}
+                    onClick={() => setPage(1)}
+                  >
+                    ‹‹
+                  </button>
+                  <button
+                    className="iv-page-btn"
+                    disabled={page === 1}
+                    onClick={() => setPage(p => p - 1)}
+                  >
+                    ‹ Prev
+                  </button>
+                  {/* Page number buttons */}
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum: number;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (page <= 3) {
+                      pageNum = i + 1;
+                    } else if (page >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = page - 2 + i;
+                    }
+                    return (
+                      <button
+                        key={pageNum}
+                        className={`iv-page-btn ${page === pageNum ? 'iv-page-btn-active' : ''}`}
+                        onClick={() => setPage(pageNum)}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                  <button
+                    className="iv-page-btn"
+                    disabled={page === totalPages}
+                    onClick={() => setPage(p => p + 1)}
+                  >
+                    Next ›
+                  </button>
+                  <button
+                    className="iv-page-btn"
+                    disabled={page === totalPages}
+                    onClick={() => setPage(totalPages)}
+                  >
+                    ››
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
