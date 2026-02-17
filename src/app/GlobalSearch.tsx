@@ -1,5 +1,11 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
+
+const supabase = createBrowserClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 interface Props {
   candidates: any[];
@@ -14,6 +20,7 @@ export default function GlobalSearch({ candidates, jobs, onSelectCandidate, onSe
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isClosing, setIsClosing] = useState(false);
+  const [extraCandidates, setExtraCandidates] = useState<any[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -53,13 +60,33 @@ export default function GlobalSearch({ candidates, jobs, onSelectCandidate, onSe
     return str.toLowerCase().includes(searchQuery.toLowerCase());
   };
 
-  const filteredCandidates = query.length >= 2 
-    ? candidates.filter(c => 
+  // Live search Supabase for candidates not in the loaded list (e.g. WhatsApp-only contacts)
+  useEffect(() => {
+    if (query.length < 2) { setExtraCandidates([]); return; }
+    const timer = setTimeout(async () => {
+      const { data } = await supabase
+        .from('candidates')
+        .select('id, name, phone_e164, status, source, roles, last_called_at')
+        .or(`name.ilike.%${query}%,phone_e164.ilike.%${query}%`)
+        .limit(10);
+      if (data) {
+        // Only add ones not already in the prop list
+        const propIds = new Set(candidates.map((c: any) => c.id));
+        setExtraCandidates(data.filter(c => !propIds.has(c.id)));
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query, candidates]);
+
+  const allCandidates = [...candidates, ...extraCandidates];
+
+  const filteredCandidates = query.length >= 2
+    ? allCandidates.filter(c =>
         matchesQuery(c.name, query) ||
         matchesQuery(c.phone_e164, query) ||
         matchesQuery(c.roles, query) ||
         matchesQuery(c.email, query)
-      ).slice(0, 5)
+      ).slice(0, 6)
     : [];
 
   const filteredJobs = query.length >= 2

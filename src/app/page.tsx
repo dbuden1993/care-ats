@@ -100,7 +100,8 @@ function Dashboard() {
       if (query?.trim()) {
         const res = await fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: query.trim(), limit: 100 }) });
         const data = await res.json();
-        setCandidates((data.candidates || []).filter((c: any) => c.last_called_at !== null));
+        // Include all candidates in search results (not just called ones)
+        setCandidates(data.candidates || []);
       } else {
         const { data } = await supabase
           .from('candidates')
