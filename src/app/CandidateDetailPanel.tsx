@@ -51,7 +51,7 @@ interface CallRecord {
   created_at: string;
 }
 
-type Tab = 'overview' | 'calls' | 'messages' | 'notes' | 'activity';
+type Tab = 'overview' | 'calls' | 'messages' | 'emails' | 'notes' | 'activity';
 
 const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -79,6 +79,10 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
   // WhatsApp Messages
   const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(true);
+
+  // Email Messages
+  const [emailMessages, setEmailMessages] = useState<any[]>([]);
+  const [loadingEmails, setLoadingEmails] = useState(false);
 
   // Activity
   const [activities, setActivities] = useState<any[]>([]);
@@ -235,6 +239,27 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
     fetchWhatsAppMessages();
   }, [candidate.id, candidate.phone_e164]);
 
+  // Fetch emails
+  useEffect(() => {
+    const fetchEmails = async () => {
+      if (activeTab !== 'emails') return;
+      setLoadingEmails(true);
+      try {
+        const { data, error } = await supabase
+          .from('email_messages')
+          .select('*')
+          .eq('candidate_id', candidate.id)
+          .order('received_at', { ascending: false })
+          .limit(50);
+        if (!error) setEmailMessages(data || []);
+      } catch {
+        // email_messages table may not exist yet
+      }
+      setLoadingEmails(false);
+    };
+    fetchEmails();
+  }, [candidate.id, activeTab]);
+
   // Fetch activity
   useEffect(() => {
     const fetchActivity = async () => {
@@ -375,6 +400,7 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
     { id: 'overview', label: 'Overview', icon: '👤' },
     { id: 'calls', label: 'Calls', icon: '📞', badge: totalCalls },
     { id: 'messages', label: 'WhatsApp', icon: '💬', badge: whatsappMessages.length },
+    { id: 'emails', label: 'Emails', icon: '📧', badge: emailMessages.length || undefined },
     { id: 'notes', label: 'Notes', icon: '📝', badge: notes.length },
     { id: 'activity', label: 'Activity', icon: '📊' },
   ];
@@ -1116,6 +1142,63 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
           )}
           
           {/* ============ ACTIVITY TAB ============ */}
+          {activeTab === 'emails' && (
+            <>
+              {loadingEmails ? (
+                <div className="cdp-empty">
+                  <div className="cdp-empty-icon">⏳</div>
+                  <div className="cdp-empty-text">Loading emails...</div>
+                </div>
+              ) : emailMessages.length === 0 ? (
+                <div className="cdp-empty">
+                  <div className="cdp-empty-icon">📧</div>
+                  <div className="cdp-empty-text">No emails yet</div>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 8, textAlign: 'center', maxWidth: 260, lineHeight: 1.5 }}>
+                    Connect Outlook in the Assistant tab to start syncing emails
+                  </div>
+                </div>
+              ) : (
+                emailMessages.map((email: any) => (
+                  <div key={email.id} style={{ padding: '14px 20px', borderBottom: '1px solid #f3f4f6' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: email.direction === 'outbound' ? '#eff6ff' : '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>
+                        {email.direction === 'outbound' ? '📤' : '📥'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                          <span style={{ fontWeight: 700, fontSize: 13, color: '#111' }}>{email.subject || '(no subject)'}</span>
+                          <span style={{ fontSize: 11, color: '#9ca3af', flexShrink: 0, marginLeft: 8 }}>
+                            {email.received_at ? new Date(email.received_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>
+                          {email.direction === 'outbound' ? `To: ${email.from_email}` : `From: ${email.from_name || email.from_email}`}
+                        </div>
+                        {email.ai_summary && (
+                          <div style={{ fontSize: 12, color: '#4b5563', background: '#f9fafb', borderRadius: 6, padding: '6px 10px', marginBottom: 4, lineHeight: 1.5 }}>
+                            {email.ai_summary}
+                          </div>
+                        )}
+                        {!email.ai_summary && email.body_preview && (
+                          <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.5 }}>
+                            {email.body_preview.slice(0, 150)}{email.body_preview.length > 150 ? '...' : ''}
+                          </div>
+                        )}
+                        {email.ai_suggested_action && email.ai_suggested_action !== 'no_action' && (
+                          <div style={{ marginTop: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 20, background: '#f0fdf4', color: '#059669', border: '1px solid #bbf7d0' }}>
+                              {email.ai_suggested_action.replace(/_/g, ' ')}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+
           {activeTab === 'activity' && (
             <>
               {loadingActivity ? (

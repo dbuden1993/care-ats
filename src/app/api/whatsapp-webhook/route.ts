@@ -15,12 +15,25 @@ const anthropic = new Anthropic({
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Extension-Token',
 };
 
 // Handle OPTIONS preflight request
 export async function OPTIONS() {
   return NextResponse.json({}, { headers: corsHeaders });
+}
+
+// Validate extension token (if configured)
+function validateToken(request: NextRequest): boolean {
+  const expectedToken = process.env.WHATSAPP_EXTENSION_TOKEN;
+  // If no token is configured, allow all requests (backwards compat)
+  if (!expectedToken) return true;
+
+  const providedToken =
+    request.headers.get('X-Extension-Token') ||
+    request.headers.get('Authorization')?.replace('Bearer ', '');
+
+  return providedToken === expectedToken;
 }
 
 interface WhatsAppMessage {
@@ -229,6 +242,14 @@ async function updateIntelligence(
 
 export async function POST(request: NextRequest) {
   try {
+    // Validate token
+    if (!validateToken(request)) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized — invalid extension token' },
+        { status: 401, headers: corsHeaders }
+      );
+    }
+
     const payload: WebhookPayload = await request.json();
     
     if (!payload.messages || payload.messages.length === 0) {

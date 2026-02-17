@@ -19,6 +19,7 @@ import DashboardView from './DashboardView';
 import WhatsAppCampaign from './WhatsAppCampaign';
 import SMSCampaign from './SMSCampaign';
 import WhatsAppIntelligence from './WhatsAppIntelligence';
+import AssistantView from './AssistantView';
 import SearchBar from './SearchBar';
 import CandidateModal from './CandidateModal';
 import JobModal from './JobModal';
@@ -47,7 +48,7 @@ import type { Job, Pipeline, ViewMode, SidebarSection } from './types';
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
-type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms' | 'candidate-dashboard' | 'whatsapp-intelligence';
+type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms' | 'candidate-dashboard' | 'whatsapp-intelligence' | 'assistant';
 
 function Dashboard() {
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -74,6 +75,7 @@ function Dashboard() {
   const [importedCount, setImportedCount] = useState(0);
   const [callHistoryCount, setCallHistoryCount] = useState(0);
   const [totalCandidates, setTotalCandidates] = useState(0);
+  const [assistantBadge, setAssistantBadge] = useState(0);
   
   const toast = useToast();
 
@@ -83,6 +85,7 @@ function Dashboard() {
     { key: 'k', description: 'Kanban view', action: () => { setSection('candidates'); setViewMode('kanban'); } },
     { key: 'l', description: 'List view', action: () => { setSection('candidates'); setViewMode('list'); } },
     { key: 's', description: 'SMS Campaign', action: () => setSection('sms') },
+    { key: 'a', description: 'Assistant inbox', action: () => setSection('assistant') },
     { key: 'w', description: 'WhatsApp campaigns', action: () => setSection('whatsapp') },
     { key: 'c', description: 'Call history', action: () => setSection('call-history') },
     { key: '?', shift: true, description: 'Show shortcuts', action: () => setShowShortcuts(true) },
@@ -149,13 +152,27 @@ function Dashboard() {
     } catch (e) { console.error('Failed to count total candidates:', e); }
   }, []);
 
-  useEffect(() => { 
-    fetchCandidates(); 
-    fetchJobs(); 
-    fetchImportedCount(); 
+  const fetchAssistantBadge = useCallback(async () => {
+    try {
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      const { count: waCount } = await supabase
+        .from('whatsapp_messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('direction', 'inbound')
+        .neq('ai_suggested_action', 'no_action')
+        .gte('captured_at', cutoff);
+      setAssistantBadge(waCount ?? 0);
+    } catch (e) { /* table may not exist yet */ }
+  }, []);
+
+  useEffect(() => {
+    fetchCandidates();
+    fetchJobs();
+    fetchImportedCount();
     fetchCallHistoryCount();
     fetchTotalCandidates();
-  }, [fetchCandidates, fetchJobs, fetchImportedCount, fetchCallHistoryCount, fetchTotalCandidates]);
+    fetchAssistantBadge();
+  }, [fetchCandidates, fetchJobs, fetchImportedCount, fetchCallHistoryCount, fetchTotalCandidates, fetchAssistantBadge]);
 
   const handleSearch = (q: string) => { setSearchQuery(q); fetchCandidates(q); };
   
@@ -259,6 +276,7 @@ function Dashboard() {
       { id: 'interviews', icon: '📅', label: 'Interviews' }
     ] },
     { section: 'OUTREACH', items: [
+      { id: 'assistant', icon: '🤖', label: 'Assistant', badge: assistantBadge > 0 ? assistantBadge : undefined },
       { id: 'sms', icon: '📱', label: 'SMS Campaign', badge: importedCount > 0 ? '!' : undefined },
       { id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' },
       { id: 'whatsapp-intelligence', icon: '🧠', label: 'AI Intelligence' }
@@ -300,6 +318,8 @@ function Dashboard() {
         .nav-item.sms.active{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#d97706}
         .nav-item.call-history.active{background:linear-gradient(135deg,#fce7f3,#fbcfe8);color:#db2777}
         .nav-item.whatsapp-intelligence.active{background:linear-gradient(135deg,#fef3c7,#fde68a);color:#92400e}
+        .nav-item.assistant.active{background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:#4f46e5}
+        .nav-item.assistant.active .nav-badge{background:#c7d2fe;color:#4f46e5;animation:pulse 2s infinite}
         .nav-icon{width:20px;text-align:center;font-size:15px}
         .nav-badge{background:#e5e7eb;color:#374151;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;margin-left:auto}
         .nav-badge.alert{background:#fef3c7;color:#d97706;animation:pulse 2s infinite}
@@ -352,7 +372,7 @@ function Dashboard() {
             {group.items.map(item => (
               <Tooltip key={item.id} content={sidebarCollapsed ? item.label : ''} position="right">
                 <div 
-                  className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${item.id === 'sms' ? 'sms' : ''} ${item.id === 'call-history' ? 'call-history' : ''} ${item.id === 'whatsapp-intelligence' ? 'whatsapp-intelligence' : ''} ${section === item.id ? 'active' : ''}`} 
+                  className={`nav-item ${item.id === 'whatsapp' ? 'whatsapp' : ''} ${item.id === 'sms' ? 'sms' : ''} ${item.id === 'call-history' ? 'call-history' : ''} ${item.id === 'whatsapp-intelligence' ? 'whatsapp-intelligence' : ''} ${item.id === 'assistant' ? 'assistant' : ''} ${section === item.id ? 'active' : ''}`} 
                   onClick={() => setSection(item.id as ExtendedSection)}
                 >
                   <span className="nav-icon">{item.icon}</span>
@@ -392,6 +412,10 @@ function Dashboard() {
           <DashboardView candidates={candidates} jobs={jobs} onNavigate={handleNavigate} />
         )}
         
+        {section === 'assistant' && (
+          <AssistantView onSelectCandidate={setSelectedCandidate} />
+        )}
+
         {section === 'whatsapp' && (
           <WhatsAppCampaign candidates={candidates} />
         )}
