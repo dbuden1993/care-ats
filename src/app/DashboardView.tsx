@@ -137,17 +137,17 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
       setRecentCalls(recentCallsRes.data || []);
       setPipeline(pipelineCounts);
 
-      // Fetch today's priorities in parallel
-      const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      // Fetch today's priorities — use 7-day window to match the WhatsApp inbox
+      const cutoff7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const cutoff14d = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
       const [urgentWARes, overdueRes, interviewRes, waInboxRes] = await Promise.all([
         supabase.from('whatsapp_messages').select('*', { count: 'exact', head: true })
-          .eq('direction', 'inbound').eq('ai_suggested_action', 'urgent_response').gte('captured_at', cutoff48h),
+          .eq('direction', 'inbound').eq('ai_suggested_action', 'urgent_response').gte('captured_at', cutoff7d),
         supabase.from('candidates').select('*', { count: 'exact', head: true })
           .in('status', ['new', 'screening']).or(`last_called_at.is.null,last_called_at.lt.${cutoff14d}`),
         supabase.from('candidates').select('*', { count: 'exact', head: true }).eq('status', 'interview'),
         supabase.from('whatsapp_messages').select('*', { count: 'exact', head: true })
-          .eq('direction', 'inbound').neq('ai_suggested_action', 'no_action').gte('captured_at', cutoff48h),
+          .eq('direction', 'inbound').neq('ai_suggested_action', 'no_action').gte('captured_at', cutoff7d),
       ]);
       setPriorities({
         urgentWA: urgentWARes.count ?? 0,
@@ -163,8 +163,8 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
 
   useEffect(() => {
     fetchDashboardData();
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchDashboardData, 30000);
+    // Refresh every 2 minutes — dashboard is a summary view, not real-time
+    const interval = setInterval(fetchDashboardData, 2 * 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 

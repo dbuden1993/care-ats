@@ -264,11 +264,18 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
     ]).finally(() => setLoading(false));
   }, [fetchWhatsAppInbox, fetchEmailInbox, fetchFollowUps, checkOutlookConnection, fetchPendingBackfill]);
 
-  async function logCall(candidateId: string) {
+  async function logCall(candidateId: string, note?: string) {
     await supabase
       .from('candidates')
       .update({ last_called_at: new Date().toISOString() })
       .eq('id', candidateId);
+    if (note?.trim()) {
+      await supabase.from('notes').insert({
+        candidate_id: candidateId,
+        content: note.trim(),
+        created_at: new Date().toISOString(),
+      });
+    }
     setFollowUps(prev => prev.filter(c => c.id !== candidateId));
   }
 
@@ -445,7 +452,7 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
               <EmptyState
                 icon="💬"
                 title="No WhatsApp messages to action"
-                subtitle="Messages from the last 48 hours that need a response will appear here. Make sure the Chrome extension is installed and running."
+                subtitle="Messages from the last 7 days that need a response will appear here. Make sure the Chrome extension is installed and running."
               />
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -559,7 +566,7 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {followUps.map(c => (
-                  <FollowUpCard key={c.id} candidate={c} onViewCandidate={() => onSelectCandidate?.(c)} onLogCall={() => logCall(c.id)} />
+                  <FollowUpCard key={c.id} candidate={c} onViewCandidate={() => onSelectCandidate?.(c)} onLogCall={(note) => logCall(c.id, note)} />
                 ))}
               </div>
             )}
@@ -738,16 +745,18 @@ function EmailCard({ email, onViewCandidate }: { email: EmailMessage; onViewCand
   );
 }
 
-function FollowUpCard({ candidate, onViewCandidate, onLogCall }: { candidate: FollowUpCandidate; onViewCandidate: () => void; onLogCall: () => void }) {
+function FollowUpCard({ candidate, onViewCandidate, onLogCall }: { candidate: FollowUpCandidate; onViewCandidate: () => void; onLogCall: (note?: string) => void }) {
   const isOverdue = candidate.days_since_contact >= 14;
   const urgency = isOverdue ? 'red' : 'orange';
   const colors = { red: ['#fee2e2', '#dc2626'], orange: ['#fef3c7', '#d97706'] };
   const [bg, fg] = colors[urgency];
   const [logging, setLogging] = useState(false);
+  const [showNote, setShowNote] = useState(false);
+  const [note, setNote] = useState('');
 
   const handleLogCall = async () => {
     setLogging(true);
-    await onLogCall();
+    await onLogCall(note || undefined);
   };
 
   return (
@@ -769,6 +778,19 @@ function FollowUpCard({ candidate, onViewCandidate, onLogCall }: { candidate: Fo
               Last said: "{candidate.last_message_text.slice(0, 120)}{candidate.last_message_text.length > 120 ? '…' : ''}"
             </div>
           )}
+          {/* Inline note field — shown when "Log contact" is clicked */}
+          {showNote && !logging && (
+            <div style={{ marginBottom: 10 }}>
+              <textarea
+                autoFocus
+                placeholder="Call outcome / note (optional)..."
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                rows={2}
+                style={{ width: '100%', padding: '8px 10px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 8, resize: 'none', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={onViewCandidate} style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: 'white', cursor: 'pointer', color: '#374151' }}>
               Profile
@@ -785,13 +807,29 @@ function FollowUpCard({ candidate, onViewCandidate, onLogCall }: { candidate: Fo
                 </a>
               </>
             )}
-            <button
-              onClick={handleLogCall}
-              disabled={logging}
-              title="Mark as contacted — removes from this list"
-              style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: logging ? '#f0fdf4' : 'white', cursor: logging ? 'default' : 'pointer', color: '#059669', fontWeight: 600 }}>
-              {logging ? '✓ Logged' : '✓ Log contact'}
-            </button>
+            {!showNote && !logging && (
+              <button
+                onClick={() => setShowNote(true)}
+                title="Log this contact and optionally add a note"
+                style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: 'white', cursor: 'pointer', color: '#059669', fontWeight: 600 }}>
+                ✓ Log contact
+              </button>
+            )}
+            {showNote && !logging && (
+              <>
+                <button onClick={() => { setShowNote(false); setNote(''); }} style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: 'white', cursor: 'pointer', color: '#6b7280' }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={handleLogCall}
+                  style={{ padding: '6px 12px', fontSize: 12, border: 'none', borderRadius: 6, background: '#059669', color: 'white', cursor: 'pointer', fontWeight: 600 }}>
+                  ✓ Done
+                </button>
+              </>
+            )}
+            {logging && (
+              <span style={{ padding: '6px 12px', fontSize: 12, color: '#059669', fontWeight: 600 }}>✓ Logged</span>
+            )}
           </div>
         </div>
       </div>

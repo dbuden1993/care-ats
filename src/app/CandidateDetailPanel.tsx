@@ -107,72 +107,20 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
     source: candidate.source || '',
   });
 
-  // Fetch calls from the calls table
+  // Fetch calls from call_history (the authoritative table, keyed by phone_e164)
   useEffect(() => {
     const fetchCalls = async () => {
       setLoadingCalls(true);
-      try {
-        const phone = candidate.phone_e164;
-        console.log('Fetching calls for phone:', phone);
-        
-        if (phone) {
-          // Fetch from 'calls' table
-          const { data: callsData, error: callsError } = await supabase
-            .from('calls')
-            .select('*')
-            .eq('candidate_phone_e164', phone)
-            .order('created_at', { ascending: false });
-          
-          if (callsError) {
-            console.error('Error fetching from calls table:', callsError);
-          }
-          console.log('Calls table results:', callsData?.length || 0);
-          
-          // Fetch from 'call_history' table
-          let historyData: any[] = [];
-          try {
-            const { data, error } = await supabase
-              .from('call_history')
-              .select('*')
-              .eq('phone_e164', phone)
-              .order('call_time', { ascending: false });
-            
-            if (!error && data) {
-              historyData = data;
-            }
-            console.log('Call history table results:', historyData.length);
-          } catch (e) {
-            console.log('Call history table might not exist:', e);
-          }
-          
-          // Combine results
-          const allCalls = [...(callsData || []), ...historyData];
-          console.log('Total calls found:', allCalls.length);
-          
-          // Deduplicate by call_id
-          const seen = new Set<string>();
-          const uniqueCalls = allCalls.filter(call => {
-            const key = call.call_id || call.id;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-          
-          // Sort by most recent first
-          uniqueCalls.sort((a, b) => {
-            const dateA = new Date(a.call_time || a.created_at).getTime();
-            const dateB = new Date(b.call_time || b.created_at).getTime();
-            return dateB - dateA;
-          });
-          
-          console.log('Unique calls after dedup:', uniqueCalls.length);
-          setCallRecords(uniqueCalls);
-          if (uniqueCalls.length > 0) {
-            setExpandedCall(uniqueCalls[0].id);
-          }
-        }
-      } catch (err) {
-        console.error('Error fetching calls:', err);
+      const phone = candidate.phone_e164;
+      if (phone) {
+        const { data } = await supabase
+          .from('call_history')
+          .select('*')
+          .eq('phone_e164', phone)
+          .order('call_time', { ascending: false });
+        const calls = data || [];
+        setCallRecords(calls);
+        if (calls.length > 0) setExpandedCall(calls[0].call_id);
       }
       setLoadingCalls(false);
     };
@@ -957,7 +905,8 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
                 </div>
               ) : (
                 callRecords.map((call, index) => {
-                  const isExpanded = expandedCall === call.id;
+                  const callKey = call.call_id || call.id;
+                  const isExpanded = expandedCall === callKey;
                   const bulletPoints = parseAiRecap(call.ai_recap || call.call_summary || '');
                   const extractedData = parseExtractedJson(call.extracted_json);
                   const qualityAssessment = call.quality_assessment || extractedData?.quality_assessment;
@@ -965,10 +914,10 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
                   const experienceSummary = call.experience_summary;
                   const callType = call.call_type;
                   const confidence = call.extraction_confidence;
-                  
+
                   return (
-                    <div key={call.id} className={`cdp-call ${isExpanded ? 'expanded' : ''}`}>
-                      <div className="cdp-call-head" onClick={() => setExpandedCall(isExpanded ? null : call.id)}>
+                    <div key={callKey} className={`cdp-call ${isExpanded ? 'expanded' : ''}`}>
+                      <div className="cdp-call-head" onClick={() => setExpandedCall(isExpanded ? null : callKey)}>
                         <div className="cdp-call-info">
                           <div className="cdp-call-icon">📞</div>
                           <div className="cdp-call-details">
