@@ -102,16 +102,42 @@ function Dashboard() {
       if (query?.trim()) {
         const res = await fetch('/api/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: query.trim(), limit: 100 }) });
         const data = await res.json();
-        // Include all candidates in search results (not just called ones)
         setCandidates(data.candidates || []);
       } else {
-        const { data } = await supabase
+        // Fetch all candidates — no last_called_at filter, so WhatsApp-only contacts appear too
+        const { data: rawCandidates } = await supabase
           .from('candidates')
           .select('*')
-          .not('last_called_at', 'is', null)
-          .order('created_at', { ascending: false })
-          .limit(200);
-        setCandidates(data || []);
+          .order('last_called_at', { ascending: false, nullsFirst: false })
+          .limit(300);
+
+        // Fetch the most recent WhatsApp message time per candidate
+        const { data: msgTimes } = await supabase
+          .from('whatsapp_messages')
+          .select('candidate_id, captured_at')
+          .not('candidate_id', 'is', null)
+          .order('captured_at', { ascending: false });
+
+        // Build a map: candidate_id → latest message time
+        const latestMsg: Record<string, string> = {};
+        for (const m of msgTimes || []) {
+          if (m.candidate_id && !latestMsg[m.candidate_id]) {
+            latestMsg[m.candidate_id] = m.captured_at;
+          }
+        }
+
+        // Merge and sort by true last activity (call or WhatsApp, whichever is more recent)
+        const merged = (rawCandidates || []).map(c => ({
+          ...c,
+          _last_activity: new Date(Math.max(
+            c.last_called_at ? new Date(c.last_called_at).getTime() : 0,
+            latestMsg[c.id] ? new Date(latestMsg[c.id]).getTime() : 0,
+            new Date(c.created_at).getTime(),
+          )).toISOString(),
+        }));
+
+        merged.sort((a, b) => new Date(b._last_activity).getTime() - new Date(a._last_activity).getTime());
+        setCandidates(merged);
       }
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -270,33 +296,31 @@ function Dashboard() {
   };
 
   const navItems = [
-    { section: 'RECRUITMENT', items: [
-      { id: 'dashboard', icon: '📊', label: 'Dashboard' }, 
-      { id: 'candidate-dashboard', icon: '👥', label: 'Candidates', badge: callHistoryCount || undefined },
+    { section: 'WORK', items: [
+      { id: 'assistant', icon: '🤖', label: 'Assistant', badge: assistantBadge > 0 ? assistantBadge : undefined },
+      { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+      { id: 'candidate-dashboard', icon: '👥', label: 'Candidates', badge: totalCandidates || undefined },
       { id: 'candidates', icon: '📋', label: 'Pipeline', badge: stats.total || undefined },
-      { id: 'imported', icon: '📥', label: 'Imported Pool', badge: importedCount || undefined }, 
-      { id: 'jobs', icon: '💼', label: 'Jobs', badge: jobs.filter(j => j.status === 'open').length || undefined }, 
-      { id: 'interviews', icon: '📅', label: 'Interviews' }
+      { id: 'jobs', icon: '💼', label: 'Jobs', badge: jobs.filter(j => j.status === 'open').length || undefined },
+      { id: 'interviews', icon: '📅', label: 'Interviews' },
     ] },
     { section: 'OUTREACH', items: [
-      { id: 'assistant', icon: '🤖', label: 'Assistant', badge: assistantBadge > 0 ? assistantBadge : undefined },
-      { id: 'sms', icon: '📱', label: 'SMS Campaign', badge: importedCount > 0 ? '!' : undefined },
       { id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' },
-      { id: 'whatsapp-intelligence', icon: '🧠', label: 'AI Intelligence' }
+      { id: 'sms', icon: '📱', label: 'SMS Campaign' },
+      { id: 'whatsapp-intelligence', icon: '🧠', label: 'AI Intelligence' },
     ] },
     { section: 'TALENT', items: [
-      { id: 'talent-pools', icon: '🎯', label: 'Talent Pools' }, 
-      { id: 'referrals', icon: '🤝', label: 'Referrals' }, 
-      { id: 'onboarding', icon: '🚀', label: 'Onboarding' }
-    ] },
-    { section: 'INSIGHTS', items: [
-      { id: 'reports', icon: '📈', label: 'Reports' }, 
-      { id: 'surveys', icon: '⭐', label: 'Candidate NPS' }
+      { id: 'imported', icon: '📥', label: 'Imported Pool', badge: importedCount || undefined },
+      { id: 'talent-pools', icon: '🎯', label: 'Talent Pools' },
+      { id: 'referrals', icon: '🤝', label: 'Referrals' },
+      { id: 'onboarding', icon: '🚀', label: 'Onboarding' },
+      { id: 'surveys', icon: '⭐', label: 'Candidate NPS' },
     ] },
     { section: 'SETTINGS', items: [
-      { id: 'templates', icon: '📝', label: 'Templates' }, 
-      { id: 'automations', icon: '⚡', label: 'Automations' }, 
-      { id: 'compliance', icon: '🔒', label: 'Compliance' }, 
+      { id: 'reports', icon: '📈', label: 'Reports' },
+      { id: 'templates', icon: '📝', label: 'Templates' },
+      { id: 'automations', icon: '⚡', label: 'Automations' },
+      { id: 'compliance', icon: '🔒', label: 'Compliance' },
       { id: 'settings', icon: '⚙️', label: 'Settings' }
     ] },
   ];

@@ -19,7 +19,7 @@ interface AIChatSidebarProps {
 const QUICK_PROMPTS = [
   'What needs my attention today?',
   "Who hasn't been contacted this week?",
-  'Show me all candidates in screening',
+  'Find me candidates for a new care package',
   'How is my pipeline looking?',
 ];
 

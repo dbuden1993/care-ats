@@ -63,6 +63,26 @@ const tools: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: 'match_candidates_for_role',
+    description: 'Find and rank candidates who match a specific job or care package requirement. Use this when the recruiter describes a role or package and wants to know who to contact. Returns ranked matches based on qualifications, availability, and engagement.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        role_description: { type: 'string', description: 'Free-text description of the role or package, e.g. "home carer in Birmingham, weekends, needs driver licence and DBS"' },
+        requires_driver: { type: 'boolean', description: 'Must have driver licence' },
+        requires_dbs: { type: 'boolean', description: 'Must have DBS check' },
+        requires_training: { type: 'boolean', description: 'Must have mandatory training' },
+        preferred_status: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Preferred pipeline statuses to look in, e.g. ["new", "screening"]'
+        },
+        limit: { type: 'number', description: 'Max candidates to return (default 15)' },
+      },
+      required: ['role_description'],
+    },
+  },
 ];
 
 // ─── Tool implementations ────────────────────────────────────────────────────
@@ -261,6 +281,84 @@ async function getPipelineStats() {
   };
 }
 
+async function matchCandidatesForRole(params: {
+  role_description: string;
+  requires_driver?: boolean;
+  requires_dbs?: boolean;
+  requires_training?: boolean;
+  preferred_status?: string[];
+  limit?: number;
+}) {
+  let query = supabase
+    .from('candidates')
+    .select('id, name, phone_e164, status, source, last_called_at, driver, dbs_update_service, mandatory_training, roles, earliest_start_date')
+    .not('status', 'eq', 'hired')
+    .not('status', 'eq', 'rejected')
+    .order('last_called_at', { ascending: false, nullsFirst: false })
+    .limit(params.limit || 15);
+
+  if (params.requires_driver) query = query.eq('driver', 'Yes');
+  if (params.requires_dbs) query = query.eq('dbs_update_service', 'Yes');
+  if (params.requires_training) query = query.eq('mandatory_training', 'Yes');
+  if (params.preferred_status && params.preferred_status.length > 0) {
+    query = query.in('status', params.preferred_status);
+  }
+
+  const { data: candidates } = await query;
+
+  // Also get latest WhatsApp engagement for these candidates
+  const ids = (candidates || []).map(c => c.id);
+  let msgActivity: Record<string, { last_msg: string; intent: string | null }> = {};
+
+  if (ids.length > 0) {
+    const { data: msgs } = await supabase
+      .from('whatsapp_messages')
+      .select('candidate_id, captured_at, ai_intent')
+      .in('candidate_id', ids)
+      .eq('direction', 'inbound')
+      .order('captured_at', { ascending: false });
+
+    for (const m of msgs || []) {
+      if (m.candidate_id && !msgActivity[m.candidate_id]) {
+        msgActivity[m.candidate_id] = { last_msg: m.captured_at, intent: m.ai_intent };
+      }
+    }
+  }
+
+  const results = (candidates || []).map(c => {
+    const msg = msgActivity[c.id];
+    const lastActivity = msg?.last_msg || c.last_called_at || null;
+    const daysSinceContact = lastActivity
+      ? Math.floor((Date.now() - new Date(lastActivity).getTime()) / 86400000)
+      : null;
+    return {
+      id: c.id,
+      name: c.name || 'Unknown',
+      phone: c.phone_e164,
+      status: c.status,
+      qualifications: {
+        driver: c.driver,
+        dbs: c.dbs_update_service,
+        training: c.mandatory_training,
+      },
+      roles: c.roles,
+      earliest_start: c.earliest_start_date,
+      last_activity: lastActivity,
+      days_since_contact: daysSinceContact,
+      last_whatsapp_intent: msg?.intent || null,
+    };
+  });
+
+  return {
+    role_searched: params.role_description,
+    total_matches: results.length,
+    candidates: results,
+    note: results.length === 0
+      ? 'No candidates match all requirements. Try relaxing some filters.'
+      : `Found ${results.length} candidates. Those with recent contact are listed first.`,
+  };
+}
+
 // ─── Tool executor ────────────────────────────────────────────────────────────
 
 async function executeTool(name: string, input: Record<string, unknown>): Promise<unknown> {
@@ -273,6 +371,8 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
       return getWhatsappInbox();
     case 'get_pipeline_stats':
       return getPipelineStats();
+    case 'match_candidates_for_role':
+      return matchCandidatesForRole(input as Parameters<typeof matchCandidatesForRole>[0]);
     default:
       return { error: `Unknown tool: ${name}` };
   }
@@ -300,13 +400,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const systemPrompt = `You are a personal recruitment assistant for a UK care staffing agency. You have full access to the recruiter's candidate database, WhatsApp messages, and call history via tools.
+    const systemPrompt = `You are a sharp, experienced personal recruitment assistant for a UK care staffing agency. You have real-time access to the recruiter's entire candidate database, WhatsApp conversations, and call history via tools. Think like a senior recruiter who has been working this desk for years and knows every candidate personally.
 
-Be direct and practical — name actual candidates, reference actual messages, give specific actionable advice. Format clearly but concisely. Think like an experienced recruiter who knows every candidate personally.
-
-When asked about the pipeline, inbox, or what needs attention: use the tools to fetch live data and give a clear, specific answer.
-When asked about a specific candidate: use get_candidate_detail to get their full history before answering.
-When listing candidates: include their name, current status, and the most relevant detail.${contextNote ? '\n\n' + contextNote : ''}`;
+Your job is to make the recruiter's life easier by thinking FOR them:
+- When asked what needs attention: fetch the inbox + pipeline, then prioritise and tell them EXACTLY who to contact first and why
+- When asked about a candidate: get their full detail and give a crisp brief — recent messages, call history, what they said, what action to take
+- When given a new package or job requirement: use match_candidates_for_role to find the best fits, then rank them by readiness (qualifications + recency of contact + expressed interest)
+- Be proactive: if you notice something important while fetching data (e.g. someone said they're available this weekend, or hasn't been contacted in 2 weeks despite showing interest), flag it unprompted
+- Always name specific candidates, never speak in vague generalities
+- Format with clear structure: bullet points, bold names, short sentences. No waffle.
+- UK context: DBS = criminal background check, mandatory training = care certificates, drivers needed for community care roles${contextNote ? '\n\n' + contextNote : ''}`;
 
     // Agentic loop: max 5 rounds of tool calls
     let currentMessages = [...messages];
