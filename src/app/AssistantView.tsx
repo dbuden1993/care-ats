@@ -86,7 +86,12 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
   const [syncingEmail, setSyncingEmail] = useState(false);
 
   const fetchWhatsAppInbox = useCallback(async () => {
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    // Widen to 7 days so messages don't vanish after 48h
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Skip media-only placeholder messages at DB level
+    const MEDIA_PATTERNS = ['[Image]', '[Video]', '[Audio]', '[Document]', '[Sticker]', '[GIF]', '<Media omitted>'];
+
     const { data: inbound } = await supabase
       .from('whatsapp_messages')
       .select('*, candidates(name, status, phone_e164)')
@@ -94,14 +99,16 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       .neq('ai_suggested_action', 'no_action')
       .gte('captured_at', cutoff)
       .order('captured_at', { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (!inbound?.length) { setWhatsappMessages([]); return; }
 
+    // Filter out media-only messages
+    const withText = inbound.filter(m => !MEDIA_PATTERNS.some(p => m.message_text?.trim() === p));
+
     // Find which chats have already been replied to (outbound sent AFTER the inbound)
-    // Group by candidate_id / chat_name and fetch latest outbound per chat
-    const candidateIds = [...new Set(inbound.map(m => m.candidate_id).filter(Boolean))];
-    const chatNames = [...new Set(inbound.map(m => m.chat_name).filter(Boolean))];
+    const candidateIds = [...new Set(withText.map(m => m.candidate_id).filter(Boolean))];
+    const chatNames = [...new Set(withText.map(m => m.chat_name).filter(Boolean))];
 
     const { data: outbound } = await supabase
       .from('whatsapp_messages')
@@ -125,7 +132,7 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
     }
 
     // Keep only inbound messages that haven't been replied to yet
-    const unreplied = inbound.filter(m => {
+    const unreplied = withText.filter(m => {
       const key = m.candidate_id || m.chat_name;
       if (!key) return true;
       const inboundTime = new Date(m.captured_at).getTime();
@@ -133,7 +140,22 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       return !replyTime || replyTime < inboundTime;
     });
 
-    setWhatsappMessages(unreplied);
+    // Deduplicate: one card per candidate — keep the most urgent / most recent message
+    const seen = new Map<string, WhatsAppMessage>();
+    for (const m of unreplied) {
+      const key = m.candidate_id || m.chat_name;
+      if (!key) continue;
+      const existing = seen.get(key);
+      if (!existing) { seen.set(key, m); continue; }
+      // Prefer urgent over non-urgent, otherwise keep more recent
+      const mIsUrgent = m.ai_suggested_action === 'urgent_response';
+      const exIsUrgent = existing.ai_suggested_action === 'urgent_response';
+      if (mIsUrgent && !exIsUrgent) { seen.set(key, m); continue; }
+      if (!mIsUrgent && exIsUrgent) continue;
+      if (new Date(m.captured_at) > new Date(existing.captured_at)) seen.set(key, m);
+    }
+
+    setWhatsappMessages([...seen.values()]);
   }, []);
 
   const fetchEmailInbox = useCallback(async () => {
@@ -155,15 +177,37 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       .in('status', ['new', 'screening', 'interview'])
       .or(`last_called_at.is.null,last_called_at.lt.${cutoff7days}`)
       .order('last_called_at', { ascending: true, nullsFirst: true })
-      .limit(30);
+      .limit(60);
+
+    if (!data?.length) { setFollowUps([]); return; }
+
+    // Get latest outbound WhatsApp message per candidate — counts as contact too
+    const ids = data.map(c => c.id);
+    const { data: waMsgs } = await supabase
+      .from('whatsapp_messages')
+      .select('candidate_id, captured_at')
+      .in('candidate_id', ids)
+      .eq('direction', 'outbound')
+      .order('captured_at', { ascending: false });
+
+    const lastWA: Record<string, number> = {};
+    for (const m of waMsgs || []) {
+      if (!m.candidate_id) continue;
+      const t = new Date(m.captured_at).getTime();
+      if (!lastWA[m.candidate_id] || t > lastWA[m.candidate_id]) lastWA[m.candidate_id] = t;
+    }
 
     const enriched = (data || []).map((c: any) => {
-      const lastContact = c.last_called_at ? new Date(c.last_called_at) : null;
-      const daysSince = lastContact
-        ? Math.floor((Date.now() - lastContact.getTime()) / (1000 * 60 * 60 * 24))
+      const callTime = c.last_called_at ? new Date(c.last_called_at).getTime() : 0;
+      const waTime = lastWA[c.id] || 0;
+      const lastContactTime = Math.max(callTime, waTime);
+      const daysSince = lastContactTime
+        ? Math.floor((Date.now() - lastContactTime) / (1000 * 60 * 60 * 24))
         : 999;
       return { ...c, days_since_contact: daysSince };
-    });
+    }).filter(c => c.days_since_contact >= 7)  // remove anyone contacted in last 7 days via WA
+      .sort((a, b) => b.days_since_contact - a.days_since_contact)
+      .slice(0, 30);
 
     setFollowUps(enriched);
   }, []);
@@ -189,6 +233,14 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       checkOutlookConnection(),
     ]).finally(() => setLoading(false));
   }, [fetchWhatsAppInbox, fetchEmailInbox, fetchFollowUps, checkOutlookConnection]);
+
+  async function markDone(messageId: string) {
+    await supabase
+      .from('whatsapp_messages')
+      .update({ ai_suggested_action: 'no_action' })
+      .eq('id', messageId);
+    setWhatsappMessages(prev => prev.filter(m => m.id !== messageId));
+  }
 
   async function generateReply(message: WhatsAppMessage) {
     setReplyState({
@@ -327,6 +379,7 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
                     key={msg.id}
                     msg={msg}
                     onReply={() => generateReply(msg)}
+                    onMarkDone={() => markDone(msg.id)}
                     onViewCandidate={() => msg.candidates && onSelectCandidate?.({ id: msg.candidate_id, ...msg.candidates })}
                   />
                 ))}
@@ -499,17 +552,18 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
-function MessageCard({ msg, onReply, onViewCandidate }: { msg: WhatsAppMessage; onReply: () => void; onViewCandidate: () => void }) {
+function MessageCard({ msg, onReply, onMarkDone, onViewCandidate }: { msg: WhatsAppMessage; onReply: () => void; onMarkDone: () => void; onViewCandidate: () => void }) {
   const intent = msg.ai_intent ? INTENT_LABELS[msg.ai_intent] : null;
   const action = msg.ai_suggested_action ? ACTION_LABELS[msg.ai_suggested_action] : null;
   const timeAgo = formatTimeAgo(msg.captured_at);
+  const isUrgent = msg.ai_suggested_action === 'urgent_response';
 
   return (
     <div style={{
       background: 'white',
       borderRadius: 12,
       padding: 18,
-      border: msg.ai_suggested_action === 'urgent_response' ? '2px solid #ef4444' : '1px solid #e5e7eb',
+      border: isUrgent ? '2px solid #ef4444' : '1px solid #e5e7eb',
       boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -530,7 +584,7 @@ function MessageCard({ msg, onReply, onViewCandidate }: { msg: WhatsAppMessage; 
                 {intent.label}
               </span>
             )}
-            {msg.ai_suggested_action === 'urgent_response' && (
+            {isUrgent && (
               <span style={{ padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: '#fee2e2', color: '#dc2626' }}>
                 🚨 Urgent
               </span>
@@ -549,6 +603,13 @@ function MessageCard({ msg, onReply, onViewCandidate }: { msg: WhatsAppMessage; 
               </span>
             )}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button
+                onClick={onMarkDone}
+                title="Mark as handled — removes from inbox"
+                style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: 'white', cursor: 'pointer', color: '#6b7280' }}
+              >
+                ✓ Done
+              </button>
               {msg.candidate_id && (
                 <button onClick={onViewCandidate} style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: 'white', cursor: 'pointer', color: '#374151' }}>
                   View candidate
