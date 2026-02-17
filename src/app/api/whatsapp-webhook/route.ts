@@ -190,8 +190,8 @@ async function analyzeMessage(message: WhatsAppMessage): Promise<{
   
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
       system: `You analyze WhatsApp messages from care worker candidates. Extract key information quickly.`,
       messages: [{
         role: 'user',
