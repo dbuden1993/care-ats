@@ -87,7 +87,7 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
 
   const fetchWhatsAppInbox = useCallback(async () => {
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-    const { data } = await supabase
+    const { data: inbound } = await supabase
       .from('whatsapp_messages')
       .select('*, candidates(name, status, phone_e164)')
       .eq('direction', 'inbound')
@@ -95,7 +95,45 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       .gte('captured_at', cutoff)
       .order('captured_at', { ascending: false })
       .limit(50);
-    setWhatsappMessages(data || []);
+
+    if (!inbound?.length) { setWhatsappMessages([]); return; }
+
+    // Find which chats have already been replied to (outbound sent AFTER the inbound)
+    // Group by candidate_id / chat_name and fetch latest outbound per chat
+    const candidateIds = [...new Set(inbound.map(m => m.candidate_id).filter(Boolean))];
+    const chatNames = [...new Set(inbound.map(m => m.chat_name).filter(Boolean))];
+
+    const { data: outbound } = await supabase
+      .from('whatsapp_messages')
+      .select('candidate_id, chat_name, captured_at')
+      .eq('direction', 'outbound')
+      .or(
+        [
+          candidateIds.length ? `candidate_id.in.(${candidateIds.join(',')})` : null,
+          chatNames.length ? `chat_name.in.(${chatNames.map(n => `"${n}"`).join(',')})` : null,
+        ].filter(Boolean).join(',')
+      )
+      .order('captured_at', { ascending: false });
+
+    // Build map: chat key → latest outbound time
+    const lastReply: Record<string, number> = {};
+    for (const m of outbound || []) {
+      const key = m.candidate_id || m.chat_name;
+      if (!key) continue;
+      const t = new Date(m.captured_at).getTime();
+      if (!lastReply[key] || t > lastReply[key]) lastReply[key] = t;
+    }
+
+    // Keep only inbound messages that haven't been replied to yet
+    const unreplied = inbound.filter(m => {
+      const key = m.candidate_id || m.chat_name;
+      if (!key) return true;
+      const inboundTime = new Date(m.captured_at).getTime();
+      const replyTime = lastReply[key];
+      return !replyTime || replyTime < inboundTime;
+    });
+
+    setWhatsappMessages(unreplied);
   }, []);
 
   const fetchEmailInbox = useCallback(async () => {
