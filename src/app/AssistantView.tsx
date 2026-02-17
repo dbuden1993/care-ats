@@ -159,7 +159,14 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       if (new Date(m.captured_at) > new Date(existing.captured_at)) seen.set(key, m);
     }
 
-    setWhatsappMessages([...seen.values()]);
+    // Sort: urgent first, then by most recent
+    const sorted = [...seen.values()].sort((a, b) => {
+      const aUrgent = a.ai_suggested_action === 'urgent_response' ? 1 : 0;
+      const bUrgent = b.ai_suggested_action === 'urgent_response' ? 1 : 0;
+      if (aUrgent !== bUrgent) return bUrgent - aUrgent;
+      return new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime();
+    });
+    setWhatsappMessages(sorted);
   }, []);
 
   const fetchEmailInbox = useCallback(async () => {
@@ -264,19 +271,19 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
     ]).finally(() => setLoading(false));
   }, [fetchWhatsAppInbox, fetchEmailInbox, fetchFollowUps, checkOutlookConnection, fetchPendingBackfill]);
 
-  async function logCall(candidateId: string, note?: string) {
-    await supabase
-      .from('candidates')
-      .update({ last_called_at: new Date().toISOString() })
-      .eq('id', candidateId);
+  function logCall(candidateId: string, note?: string) {
+    // Optimistic: remove from list immediately
+    setFollowUps(prev => prev.filter(c => c.id !== candidateId));
+    const now = new Date().toISOString();
+    supabase.from('candidates').update({ last_called_at: now }).eq('id', candidateId).then();
     if (note?.trim()) {
-      await supabase.from('notes').insert({
+      supabase.from('notes').insert({
         candidate_id: candidateId,
         content: note.trim(),
-        created_at: new Date().toISOString(),
-      });
+        author_name: 'User',
+        created_at: now,
+      }).then();
     }
-    setFollowUps(prev => prev.filter(c => c.id !== candidateId));
   }
 
   async function runBackfill() {
@@ -296,12 +303,14 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
     }
   }
 
-  async function markDone(messageId: string) {
-    await supabase
+  function markDone(messageId: string) {
+    // Optimistic: remove from UI immediately, then persist in background
+    setWhatsappMessages(prev => prev.filter(m => m.id !== messageId));
+    supabase
       .from('whatsapp_messages')
       .update({ ai_suggested_action: 'no_action' })
-      .eq('id', messageId);
-    setWhatsappMessages(prev => prev.filter(m => m.id !== messageId));
+      .eq('id', messageId)
+      .then();
   }
 
   async function generateReply(message: WhatsAppMessage) {
@@ -334,12 +343,14 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
     }
   }
 
-  async function sendWhatsAppReply() {
+  function sendWhatsAppReply() {
     if (!replyState || !replyState.draftReply.trim()) return;
     // Open WhatsApp Web with the message pre-filled
     const phone = replyState.phone?.replace('+', '');
     const encodedMsg = encodeURIComponent(replyState.draftReply);
     window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${encodedMsg}`, '_blank');
+    // Mark as handled — reply was sent
+    markDone(replyState.messageId);
     setReplyState(null);
   }
 
@@ -639,6 +650,8 @@ function MessageCard({ msg, onReply, onMarkDone, onViewCandidate }: { msg: Whats
   const action = msg.ai_suggested_action ? ACTION_LABELS[msg.ai_suggested_action] : null;
   const timeAgo = formatTimeAgo(msg.captured_at);
   const isUrgent = msg.ai_suggested_action === 'urgent_response';
+  const [expanded, setExpanded] = useState(false);
+  const isLong = msg.message_text.length > 200;
 
   return (
     <div style={{
@@ -675,7 +688,15 @@ function MessageCard({ msg, onReply, onMarkDone, onViewCandidate }: { msg: Whats
           </div>
 
           <div style={{ fontSize: 13, color: '#374151', marginBottom: 10, lineHeight: 1.5 }}>
-            {msg.message_text.length > 200 ? msg.message_text.slice(0, 200) + '...' : msg.message_text}
+            {isLong && !expanded ? msg.message_text.slice(0, 200) + '…' : msg.message_text}
+            {isLong && (
+              <button
+                onClick={() => setExpanded(e => !e)}
+                style={{ marginLeft: 6, background: 'none', border: 'none', color: '#6366f1', fontSize: 12, cursor: 'pointer', padding: 0, fontWeight: 600 }}
+              >
+                {expanded ? 'Show less' : 'Show more'}
+              </button>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

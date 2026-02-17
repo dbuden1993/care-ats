@@ -279,25 +279,32 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
   const handleAddNote = async () => {
     if (!newNote.trim()) return;
     setSavingNote(true);
+    const optimistic = {
+      id: `temp-${Date.now()}`,
+      candidate_id: candidate.id,
+      content: newNote.trim(),
+      author_name: 'User',
+      created_at: new Date().toISOString(),
+    };
+    setNotes(prev => [optimistic, ...prev]);
+    setNewNote('');
     try {
-      const { error } = await supabase.from('notes').insert([{
-        candidate_id: candidate.id,
-        content: newNote,
-        author_name: 'User',
-        created_at: new Date().toISOString(),
+      await supabase.from('notes').insert([{
+        candidate_id: optimistic.candidate_id,
+        content: optimistic.content,
+        author_name: optimistic.author_name,
+        created_at: optimistic.created_at,
       }]);
-      if (!error) {
-        setNewNote('');
-        // Refresh notes
-        const { data } = await supabase
-          .from('notes')
-          .select('*')
-          .eq('candidate_id', candidate.id)
-          .order('created_at', { ascending: false });
-        setNotes(data || []);
-      }
+      // Refresh to get real ID from DB
+      const { data } = await supabase
+        .from('notes')
+        .select('*')
+        .eq('candidate_id', candidate.id)
+        .order('created_at', { ascending: false });
+      setNotes(data || []);
     } catch (err) {
       console.error('Error adding note:', err);
+      setNotes(prev => prev.filter(n => n.id !== optimistic.id));
     }
     setSavingNote(false);
   };
@@ -1235,9 +1242,10 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
               <div className="cdp-note-input">
                 <textarea
                   className="cdp-note-textarea"
-                  placeholder="Add a note..."
+                  placeholder="Add a note... (Ctrl+Enter to save)"
                   value={newNote}
                   onChange={e => setNewNote(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleAddNote(); } }}
                 />
                 <button 
                   className="cdp-btn save" 
@@ -1262,10 +1270,26 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
                 </div>
               ) : (
                 notes.map(note => (
-                  <div key={note.id} className="cdp-note">
+                  <div key={note.id} className="cdp-note" style={{ position: 'relative' }}>
                     <div className="cdp-note-head">
                       <span className="cdp-note-author">{note.author_name || 'User'}</span>
-                      <span className="cdp-note-date">{fmtDateTime(note.created_at)}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span className="cdp-note-date">{fmtDateTime(note.created_at)}</span>
+                        {!note.id.startsWith('temp-') && (
+                          <button
+                            onClick={async () => {
+                              setNotes(prev => prev.filter(n => n.id !== note.id));
+                              await supabase.from('notes').delete().eq('id', note.id);
+                            }}
+                            title="Delete note"
+                            style={{ background: 'none', border: 'none', color: '#d1d5db', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}
+                            onMouseEnter={e => (e.currentTarget.style.color = '#ef4444')}
+                            onMouseLeave={e => (e.currentTarget.style.color = '#d1d5db')}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
                     </div>
                     <div className="cdp-note-text">{note.content}</div>
                   </div>

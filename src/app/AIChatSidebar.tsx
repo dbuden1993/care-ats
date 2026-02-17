@@ -34,6 +34,7 @@ export default function AIChatSidebar({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -111,6 +112,13 @@ export default function AIChatSidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPrompt]);
 
+  const copyMessage = (content: string, index: number) => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 1500);
+    });
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -118,18 +126,67 @@ export default function AIChatSidebar({
     }
   };
 
-  // Render message text — detect candidate name patterns like [CANDIDATE:id:name]
-  // The AI can optionally emit these, but mostly we just render plain text
+  // Render AI response markdown: bold, bullets, numbered lists, inline code
   function renderMessageContent(content: string) {
-    // Simple linkification for candidate IDs if the AI includes them
-    // Format: any UUID-like pattern we recognise from the DB
     const lines = content.split('\n');
-    return lines.map((line, i) => (
-      <span key={i}>
-        {line}
-        {i < lines.length - 1 && <br />}
-      </span>
-    ));
+    const elements: React.ReactNode[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // Blank line → spacer
+      if (!line.trim()) { elements.push(<div key={i} style={{ height: 6 }} />); i++; continue; }
+
+      // Numbered list item: "1. text" or "12. text"
+      const numMatch = line.match(/^(\d+)\.\s+(.+)/);
+      if (numMatch) {
+        elements.push(
+          <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 3 }}>
+            <span style={{ color: '#6366f1', fontWeight: 700, minWidth: 18, fontSize: 12 }}>{numMatch[1]}.</span>
+            <span>{renderInline(numMatch[2])}</span>
+          </div>
+        );
+        i++; continue;
+      }
+
+      // Bullet list item: "- text" or "• text"
+      const bulletMatch = line.match(/^[-•*]\s+(.+)/);
+      if (bulletMatch) {
+        elements.push(
+          <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 3 }}>
+            <span style={{ color: '#6366f1', lineHeight: '1.5' }}>·</span>
+            <span>{renderInline(bulletMatch[1])}</span>
+          </div>
+        );
+        i++; continue;
+      }
+
+      // Regular paragraph line
+      elements.push(<div key={i} style={{ marginBottom: 2 }}>{renderInline(line)}</div>);
+      i++;
+    }
+    return elements;
+  }
+
+  // Render inline markdown within a line: **bold**, `code`
+  function renderInline(text: string): React.ReactNode {
+    const parts: React.ReactNode[] = [];
+    // Split on **bold** or `code` patterns
+    const regex = /(\*\*(.+?)\*\*|`([^`]+)`)/g;
+    let last = 0;
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > last) parts.push(text.slice(last, match.index));
+      if (match[0].startsWith('**')) {
+        parts.push(<strong key={match.index} style={{ color: '#e2e8f0', fontWeight: 700 }}>{match[2]}</strong>);
+      } else {
+        parts.push(<code key={match.index} style={{ background: '#0f172a', padding: '1px 5px', borderRadius: 3, fontSize: '11px', color: '#a5f3fc' }}>{match[3]}</code>);
+      }
+      last = match.index + match[0].length;
+    }
+    if (last < text.length) parts.push(text.slice(last));
+    return parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : <>{parts}</>;
   }
 
   return (
@@ -273,6 +330,28 @@ export default function AIChatSidebar({
               }}>
                 {renderMessageContent(msg.content)}
               </div>
+              {msg.role === 'assistant' && (
+                <button
+                  onClick={() => copyMessage(msg.content, i)}
+                  title="Copy response"
+                  style={{
+                    marginTop: '4px',
+                    background: 'none',
+                    border: 'none',
+                    color: copiedIndex === i ? '#4ade80' : '#475569',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    padding: '2px 4px',
+                    borderRadius: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    transition: 'color 0.15s',
+                  }}
+                >
+                  {copiedIndex === i ? '✓ Copied' : '⎘ Copy'}
+                </button>
+              )}
             </div>
           ))}
 

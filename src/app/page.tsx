@@ -112,12 +112,13 @@ function Dashboard() {
           .order('last_called_at', { ascending: false, nullsFirst: false })
           .limit(300);
 
-        // Fetch the most recent WhatsApp message time per candidate
+        // Fetch the most recent WhatsApp message time per candidate (1 per candidate is enough)
         const { data: msgTimes } = await supabase
           .from('whatsapp_messages')
           .select('candidate_id, captured_at')
           .not('candidate_id', 'is', null)
-          .order('captured_at', { ascending: false });
+          .order('captured_at', { ascending: false })
+          .limit(1000);
 
         // Build a map: candidate_id → latest message time
         const latestMsg: Record<string, string> = {};
@@ -151,7 +152,6 @@ function Dashboard() {
     } catch (e) { setJobs([]); }
   }, []);
 
-  // FIX: use { count: 'exact', head: true } and nullish coalescing
   const fetchImportedCount = useCallback(async () => {
     try {
       const { count } = await supabase
@@ -162,7 +162,6 @@ function Dashboard() {
     } catch (e) { console.error('Failed to count imported:', e); }
   }, []);
 
-  // FIX: use { count: 'exact', head: true } and nullish coalescing
   const fetchCallHistoryCount = useCallback(async () => {
     try {
       const { count } = await supabase
@@ -172,7 +171,6 @@ function Dashboard() {
     } catch (e) { console.error('Failed to count call history:', e); }
   }, []);
 
-  // FIX: use { count: 'exact', head: true } and nullish coalescing
   const fetchTotalCandidates = useCallback(async () => {
     try {
       const { count } = await supabase
@@ -184,7 +182,8 @@ function Dashboard() {
 
   const fetchAssistantBadge = useCallback(async () => {
     try {
-      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      // Use 7-day window to match the Assistant inbox view
+      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const { count: waCount } = await supabase
         .from('whatsapp_messages')
         .select('*', { count: 'exact', head: true })
