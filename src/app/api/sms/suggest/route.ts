@@ -95,8 +95,8 @@ Respond ONLY with valid JSON in this exact format:
 }`;
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     });
 

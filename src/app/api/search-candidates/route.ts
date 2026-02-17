@@ -31,8 +31,8 @@ export async function POST(request: NextRequest) {
     }));
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 500,
       system: `You are a recruitment assistant helping find the best candidate matches from a database of candidate intelligence.
 Analyze the search query and return the indices of candidates that match, ranked by relevance.
 Consider partial matches, synonyms, and related terms.`,

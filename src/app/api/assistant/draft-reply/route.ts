@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const context = actionContext[suggestedAction] || 'Reply helpfully and professionally.';
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 300,
       system: `You are a recruitment coordinator at a UK care staffing agency. Draft concise, warm, professional WhatsApp reply messages. Keep replies short (2-4 sentences max). Use casual but professional UK English. Never use emojis unless the candidate used them. Sign off as "Care Team".`,
       messages: [{

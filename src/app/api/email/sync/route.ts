@@ -89,8 +89,8 @@ async function findCandidateByEmail(fromEmail: string, fromName: string) {
 async function analyzeEmail(subject: string, bodyPreview: string, fromName: string) {
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
       messages: [{
         role: 'user',
         content: `Analyze this recruitment email:
