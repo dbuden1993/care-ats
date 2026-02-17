@@ -44,6 +44,7 @@ interface FollowUpCandidate {
   last_called_at: string | null;
   last_whatsapp_at?: string | null;
   days_since_contact: number;
+  last_message_text?: string | null;
 }
 
 interface ReplyState {
@@ -181,20 +182,35 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
 
     if (!data?.length) { setFollowUps([]); return; }
 
-    // Get latest outbound WhatsApp message per candidate — counts as contact too
     const ids = data.map(c => c.id);
-    const { data: waMsgs } = await supabase
-      .from('whatsapp_messages')
-      .select('candidate_id, captured_at')
-      .in('candidate_id', ids)
-      .eq('direction', 'outbound')
-      .order('captured_at', { ascending: false });
+
+    // Get latest outbound WhatsApp time and latest inbound message text per candidate
+    const [{ data: outboundMsgs }, { data: inboundMsgs }] = await Promise.all([
+      supabase
+        .from('whatsapp_messages')
+        .select('candidate_id, captured_at')
+        .in('candidate_id', ids)
+        .eq('direction', 'outbound')
+        .order('captured_at', { ascending: false }),
+      supabase
+        .from('whatsapp_messages')
+        .select('candidate_id, message_text, captured_at')
+        .in('candidate_id', ids)
+        .eq('direction', 'inbound')
+        .order('captured_at', { ascending: false }),
+    ]);
 
     const lastWA: Record<string, number> = {};
-    for (const m of waMsgs || []) {
+    for (const m of outboundMsgs || []) {
       if (!m.candidate_id) continue;
       const t = new Date(m.captured_at).getTime();
       if (!lastWA[m.candidate_id] || t > lastWA[m.candidate_id]) lastWA[m.candidate_id] = t;
+    }
+
+    const lastInbound: Record<string, string> = {};
+    for (const m of inboundMsgs || []) {
+      if (!m.candidate_id || lastInbound[m.candidate_id]) continue;
+      lastInbound[m.candidate_id] = m.message_text;
     }
 
     const enriched = (data || []).map((c: any) => {
@@ -204,8 +220,8 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       const daysSince = lastContactTime
         ? Math.floor((Date.now() - lastContactTime) / (1000 * 60 * 60 * 24))
         : 999;
-      return { ...c, days_since_contact: daysSince };
-    }).filter(c => c.days_since_contact >= 7)  // remove anyone contacted in last 7 days via WA
+      return { ...c, days_since_contact: daysSince, last_message_text: lastInbound[c.id] || null };
+    }).filter(c => c.days_since_contact >= 7)
       .sort((a, b) => b.days_since_contact - a.days_since_contact)
       .slice(0, 30);
 
@@ -233,6 +249,14 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       checkOutlookConnection(),
     ]).finally(() => setLoading(false));
   }, [fetchWhatsAppInbox, fetchEmailInbox, fetchFollowUps, checkOutlookConnection]);
+
+  async function logCall(candidateId: string) {
+    await supabase
+      .from('candidates')
+      .update({ last_called_at: new Date().toISOString() })
+      .eq('id', candidateId);
+    setFollowUps(prev => prev.filter(c => c.id !== candidateId));
+  }
 
   async function markDone(messageId: string) {
     await supabase
@@ -484,7 +508,7 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {followUps.map(c => (
-                  <FollowUpCard key={c.id} candidate={c} onViewCandidate={() => onSelectCandidate?.(c)} />
+                  <FollowUpCard key={c.id} candidate={c} onViewCandidate={() => onSelectCandidate?.(c)} onLogCall={() => logCall(c.id)} />
                 ))}
               </div>
             )}
@@ -663,33 +687,62 @@ function EmailCard({ email, onViewCandidate }: { email: EmailMessage; onViewCand
   );
 }
 
-function FollowUpCard({ candidate, onViewCandidate }: { candidate: FollowUpCandidate; onViewCandidate: () => void }) {
-  const urgency = candidate.days_since_contact >= 14 ? 'red' : candidate.days_since_contact >= 7 ? 'orange' : 'yellow';
-  const colors = { red: ['#fee2e2', '#dc2626'], orange: ['#fef3c7', '#d97706'], yellow: ['#fef9c3', '#ca8a04'] };
+function FollowUpCard({ candidate, onViewCandidate, onLogCall }: { candidate: FollowUpCandidate; onViewCandidate: () => void; onLogCall: () => void }) {
+  const isOverdue = candidate.days_since_contact >= 14;
+  const urgency = isOverdue ? 'red' : 'orange';
+  const colors = { red: ['#fee2e2', '#dc2626'], orange: ['#fef3c7', '#d97706'] };
   const [bg, fg] = colors[urgency];
+  const [logging, setLogging] = useState(false);
+
+  const handleLogCall = async () => {
+    setLogging(true);
+    await onLogCall();
+  };
 
   return (
-    <div style={{ background: 'white', borderRadius: 12, padding: 16, border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: 14 }}>
-      <div style={{ width: 44, height: 44, borderRadius: 12, background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        <span style={{ fontSize: 20, color: fg }}>📞</span>
-      </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3 }}>{candidate.name}</div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>{candidate.status}</span>
-          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: bg, color: fg, fontWeight: 600 }}>
-            {candidate.days_since_contact >= 999 ? 'Never contacted' : `${candidate.days_since_contact}d ago`}
-          </span>
+    <div style={{ background: 'white', borderRadius: 12, padding: 16, border: `1px solid ${isOverdue ? '#fecaca' : '#e5e7eb'}` }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 10, background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 18 }}>
+          📞
         </div>
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={onViewCandidate} style={{ padding: '7px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 8, background: 'white', cursor: 'pointer' }}>Profile</button>
-        {candidate.phone_e164 && (
-          <>
-            <a href={`tel:${candidate.phone_e164}`} style={{ padding: '7px 12px', fontSize: 12, borderRadius: 8, background: '#4f46e5', color: 'white', textDecoration: 'none', fontWeight: 600 }}>📞 Call</a>
-            <a href={`https://web.whatsapp.com/send?phone=${candidate.phone_e164.replace('+','')}`} target="_blank" rel="noreferrer" style={{ padding: '7px 12px', fontSize: 12, borderRadius: 8, background: '#25d366', color: 'white', textDecoration: 'none', fontWeight: 600 }}>💬 WhatsApp</a>
-          </>
-        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <span style={{ fontWeight: 700, fontSize: 14, color: '#111' }}>{candidate.name}</span>
+            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: '#f3f4f6', color: '#6b7280' }}>{candidate.status}</span>
+            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: bg, color: fg, fontWeight: 600 }}>
+              {candidate.days_since_contact >= 999 ? 'Never contacted' : `${candidate.days_since_contact}d no contact`}
+            </span>
+          </div>
+          {candidate.last_message_text && (
+            <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8, fontStyle: 'italic', background: '#f9fafb', padding: '6px 10px', borderRadius: 6, borderLeft: '3px solid #d1d5db' }}>
+              Last said: "{candidate.last_message_text.slice(0, 120)}{candidate.last_message_text.length > 120 ? '…' : ''}"
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={onViewCandidate} style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: 'white', cursor: 'pointer', color: '#374151' }}>
+              Profile
+            </button>
+            {candidate.phone_e164 && (
+              <>
+                <a href={`https://web.whatsapp.com/send?phone=${candidate.phone_e164.replace('+', '')}`} target="_blank" rel="noreferrer"
+                  style={{ padding: '6px 12px', fontSize: 12, borderRadius: 6, background: '#25d366', color: 'white', textDecoration: 'none', fontWeight: 600 }}>
+                  💬 WhatsApp
+                </a>
+                <a href={`tel:${candidate.phone_e164}`}
+                  style={{ padding: '6px 12px', fontSize: 12, borderRadius: 6, background: '#4f46e5', color: 'white', textDecoration: 'none', fontWeight: 600 }}>
+                  📞 Call
+                </a>
+              </>
+            )}
+            <button
+              onClick={handleLogCall}
+              disabled={logging}
+              title="Mark as contacted — removes from this list"
+              style={{ padding: '6px 12px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 6, background: logging ? '#f0fdf4' : 'white', cursor: logging ? 'default' : 'pointer', color: '#059669', fontWeight: 600 }}>
+              {logging ? '✓ Logged' : '✓ Log contact'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

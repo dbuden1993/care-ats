@@ -60,6 +60,7 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
   const [recentCalls, setRecentCalls] = useState<RecentCall[]>([]);
   const [pipeline, setPipeline] = useState<PipelineCounts>({ new: 0, screening: 0, interview: 0, offer: 0, hired: 0 });
   const [loading, setLoading] = useState(true);
+  const [priorities, setPriorities] = useState<{ urgentWA: number; overdueFollowUps: number; interviewStage: number; waRepliesNeeded: number }>({ urgentWA: 0, overdueFollowUps: 0, interviewStage: 0, waRepliesNeeded: 0 });
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
@@ -135,6 +136,25 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
 
       setRecentCalls(recentCallsRes.data || []);
       setPipeline(pipelineCounts);
+
+      // Fetch today's priorities in parallel
+      const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+      const cutoff14d = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+      const [urgentWARes, overdueRes, interviewRes, waInboxRes] = await Promise.all([
+        supabase.from('whatsapp_messages').select('*', { count: 'exact', head: true })
+          .eq('direction', 'inbound').eq('ai_suggested_action', 'urgent_response').gte('captured_at', cutoff48h),
+        supabase.from('candidates').select('*', { count: 'exact', head: true })
+          .in('status', ['new', 'screening']).or(`last_called_at.is.null,last_called_at.lt.${cutoff14d}`),
+        supabase.from('candidates').select('*', { count: 'exact', head: true }).eq('status', 'interview'),
+        supabase.from('whatsapp_messages').select('*', { count: 'exact', head: true })
+          .eq('direction', 'inbound').neq('ai_suggested_action', 'no_action').gte('captured_at', cutoff48h),
+      ]);
+      setPriorities({
+        urgentWA: urgentWARes.count ?? 0,
+        overdueFollowUps: overdueRes.count ?? 0,
+        interviewStage: interviewRes.count ?? 0,
+        waRepliesNeeded: waInboxRes.count ?? 0,
+      });
     } catch (e) {
       console.error('Dashboard fetch error:', e);
     }
@@ -313,7 +333,7 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
       <div className="dash-header">
         <div className="dash-greeting">{greeting()}! 👋</div>
         <div className="dash-subtitle">
-          Here&apos;s your recruitment overview
+          Here&apos;s what needs your attention today
           {stats.pendingProcessing > 0 && (
             <span style={{ marginLeft: 12, padding: '2px 10px', background: '#fef9c3', color: '#a16207', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
               {stats.pendingProcessing} call{stats.pendingProcessing !== 1 ? 's' : ''} processing
@@ -321,6 +341,32 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
           )}
         </div>
       </div>
+
+      {/* Today's priorities strip */}
+      {!loading && (priorities.urgentWA > 0 || priorities.overdueFollowUps > 0 || priorities.interviewStage > 0 || priorities.waRepliesNeeded > 0) && (
+        <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
+          {priorities.urgentWA > 0 && (
+            <button onClick={() => onNavigate('assistant')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#dc2626' }}>
+              🚨 {priorities.urgentWA} urgent WhatsApp{priorities.urgentWA !== 1 ? 's' : ''} — reply now
+            </button>
+          )}
+          {priorities.waRepliesNeeded > 0 && priorities.urgentWA === 0 && (
+            <button onClick={() => onNavigate('assistant')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: '#ecfdf5', border: '1px solid #6ee7b7', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#059669' }}>
+              💬 {priorities.waRepliesNeeded} WhatsApp message{priorities.waRepliesNeeded !== 1 ? 's' : ''} to action
+            </button>
+          )}
+          {priorities.overdueFollowUps > 0 && (
+            <button onClick={() => onNavigate('assistant')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#d97706' }}>
+              📞 {priorities.overdueFollowUps} candidate{priorities.overdueFollowUps !== 1 ? 's' : ''} overdue for follow-up
+            </button>
+          )}
+          {priorities.interviewStage > 0 && (
+            <button onClick={() => onNavigate('candidates', { status: 'interview' })} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#4f46e5' }}>
+              📅 {priorities.interviewStage} in interview stage
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Stats tiles */}
       <div className="stats-grid">

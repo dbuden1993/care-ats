@@ -410,8 +410,17 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
     { id: 'activity', label: 'Activity', icon: '📊' },
   ];
 
+  const handleLogCall = async () => {
+    await supabase
+      .from('candidates')
+      .update({ last_called_at: new Date().toISOString() })
+      .eq('id', candidate.id);
+    onUpdate();
+  };
+
   const quickActions = [
     { icon: '📞', label: 'Call', action: () => candidate.phone_e164 && (window.location.href = `tel:${candidate.phone_e164}`), color: '#10b981' },
+    { icon: '✓ Called', label: 'Log Call', action: handleLogCall, color: '#059669' },
     { icon: '💬', label: 'WhatsApp', action: () => candidate.phone_e164 && window.open(`https://wa.me/${candidate.phone_e164.replace(/\D/g, '')}`, '_blank'), color: '#25d366' },
     { icon: '✉️', label: 'Email', action: onEmail, color: '#6366f1' },
     { icon: '📅', label: 'Schedule', action: onSchedule, color: '#f59e0b' },
