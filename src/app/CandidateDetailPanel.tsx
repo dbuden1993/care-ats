@@ -80,6 +80,10 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
   // WhatsApp Messages
   const [whatsappMessages, setWhatsappMessages] = useState<any[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(true);
+  const [replyText, setReplyText] = useState('');
+  const [draftingReply, setDraftingReply] = useState(false);
+  const [analysingConversation, setAnalysingConversation] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<string | null>(null);
 
   // Email Messages
   const [emailMessages, setEmailMessages] = useState<any[]>([]);
@@ -717,16 +721,82 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
               )}
 
               {/* AI Summary */}
-              {candidate.experience_summary && (
+              {(candidate.experience_summary || analysisResult) && (
                 <div className="cdp-section" style={{ margin: '16px 16px 0' }}>
                   <div className="cdp-ai-box">
                     <div className="cdp-ai-title">
                       <span style={{ fontSize: 18 }}>🤖</span> AI Summary
                     </div>
-                    <div className="cdp-ai-text">{candidate.experience_summary}</div>
+                    <div className="cdp-ai-text">{analysisResult || candidate.experience_summary}</div>
                   </div>
                 </div>
               )}
+
+              {/* Deep Analyse button — only show if candidate has WhatsApp messages */}
+              <div style={{ margin: '12px 16px 0', display: 'flex', gap: 8 }}>
+                <button
+                  onClick={async () => {
+                    if (analysingConversation) return;
+                    setAnalysingConversation(true);
+                    try {
+                      // Fetch all messages for this candidate
+                      const { data: msgs } = await supabase
+                        .from('whatsapp_messages')
+                        .select('direction, message_text, message_timestamp, captured_at')
+                        .eq('candidate_id', candidate.id)
+                        .order('message_timestamp', { ascending: true })
+                        .limit(500);
+
+                      if (!msgs || msgs.length === 0) {
+                        setAnalysisResult('No WhatsApp messages found for this candidate.');
+                        return;
+                      }
+
+                      // Format as readable conversation
+                      const conversationText = msgs.map(m => {
+                        const time = new Date(m.message_timestamp || m.captured_at).toLocaleDateString('en-GB');
+                        const speaker = m.direction === 'outbound' ? 'Recruiter' : candidate.name || 'Candidate';
+                        return `[${time}] ${speaker}: ${m.message_text}`;
+                      }).join('\n');
+
+                      const res = await fetch('/api/analyze-whatsapp', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          conversationText,
+                          contactName: candidate.name,
+                          messageCount: msgs.length,
+                          dateRange: `${new Date(msgs[0].message_timestamp || msgs[0].captured_at).toLocaleDateString('en-GB')} – ${new Date(msgs[msgs.length - 1].message_timestamp || msgs[msgs.length - 1].captured_at).toLocaleDateString('en-GB')}`,
+                        }),
+                      });
+                      const data = await res.json();
+                      const summary = data.summary || data.ai_summary ||
+                        (data.availability ? `Availability: ${data.availability?.join(', ')}. Skills: ${data.skills?.join(', ')}. Reliability: ${data.reliability_score}/10. ${data.summary || ''}` : null);
+                      setAnalysisResult(summary || JSON.stringify(data, null, 2));
+                    } catch {
+                      setAnalysisResult('Analysis failed — please try again.');
+                    } finally {
+                      setAnalysingConversation(false);
+                    }
+                  }}
+                  disabled={analysingConversation}
+                  style={{
+                    background: analysingConversation ? '#f3f4f6' : '#eef2ff',
+                    border: '1px solid #c7d2fe',
+                    borderRadius: 8,
+                    color: '#6366f1',
+                    cursor: analysingConversation ? 'wait' : 'pointer',
+                    padding: '7px 14px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {analysingConversation ? '🔄 Analysing...' : '🔍 Deep Analyse Conversation'}
+                </button>
+              </div>
 
               {/* Energy Score */}
               {candidate.energy_ratio !== null && candidate.energy_ratio !== undefined && (
@@ -1093,6 +1163,109 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
                       </div>
                     ));
                   })()}
+                </div>
+              )}
+
+              {/* Reply box — always shown in messages tab */}
+              {activeTab === 'messages' && (
+                <div style={{
+                  borderTop: '1px solid #e5e7eb',
+                  padding: '12px 16px',
+                  background: '#fafafa',
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'flex-end',
+                }}>
+                  <textarea
+                    value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    placeholder="Type a WhatsApp reply… (opens WhatsApp to send)"
+                    rows={2}
+                    style={{
+                      flex: 1,
+                      border: '1px solid #d1d5db',
+                      borderRadius: 10,
+                      padding: '8px 12px',
+                      fontSize: 13,
+                      resize: 'none',
+                      outline: 'none',
+                      fontFamily: 'inherit',
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (replyText.trim() && candidate.phone_e164) {
+                          const phone = candidate.phone_e164.replace(/\D/g, '');
+                          window.open(`https://wa.me/${phone}?text=${encodeURIComponent(replyText.trim())}`, '_blank');
+                          setReplyText('');
+                        }
+                      }
+                    }}
+                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <button
+                      onClick={async () => {
+                        if (draftingReply) return;
+                        setDraftingReply(true);
+                        try {
+                          const lastInbound = whatsappMessages.filter(m => m.direction === 'inbound').slice(-1)[0];
+                          const res = await fetch('/api/assistant/draft-reply', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              candidateName: candidate.name,
+                              message: lastInbound?.message_text || '',
+                              intent: lastInbound?.ai_intent,
+                              suggestedAction: lastInbound?.ai_suggested_action || 'general',
+                              type: 'whatsapp',
+                            }),
+                          });
+                          const data = await res.json();
+                          if (data.reply) setReplyText(data.reply);
+                        } finally {
+                          setDraftingReply(false);
+                        }
+                      }}
+                      disabled={draftingReply}
+                      title="AI draft reply"
+                      style={{
+                        background: '#eef2ff',
+                        border: 'none',
+                        borderRadius: 8,
+                        color: '#6366f1',
+                        cursor: draftingReply ? 'wait' : 'pointer',
+                        padding: '6px 10px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {draftingReply ? '...' : '🤖 Draft'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (replyText.trim() && candidate.phone_e164) {
+                          const phone = candidate.phone_e164.replace(/\D/g, '');
+                          window.open(`https://wa.me/${phone}?text=${encodeURIComponent(replyText.trim())}`, '_blank');
+                          setReplyText('');
+                        }
+                      }}
+                      disabled={!replyText.trim()}
+                      title="Send via WhatsApp"
+                      style={{
+                        background: '#dcfce7',
+                        border: 'none',
+                        borderRadius: 8,
+                        color: '#16a34a',
+                        cursor: replyText.trim() ? 'pointer' : 'not-allowed',
+                        padding: '6px 10px',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        opacity: replyText.trim() ? 1 : 0.5,
+                      }}
+                    >
+                      Send
+                    </button>
+                  </div>
                 </div>
               )}
             </>

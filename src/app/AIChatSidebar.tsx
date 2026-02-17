@@ -84,6 +84,23 @@ export default function AIChatSidebar({
     }
   }, [messages, loading, selectedCandidateId]);
 
+  // Morning brief — auto-open once per day on first load
+  useEffect(() => {
+    const today = new Date().toDateString();
+    const lastBriefKey = 'ai_last_brief_date';
+    const lastBrief = typeof window !== 'undefined' ? localStorage.getItem(lastBriefKey) : null;
+    if (lastBrief !== today) {
+      // Small delay so the app renders first
+      const t = setTimeout(() => {
+        setIsOpen(true);
+        localStorage.setItem(lastBriefKey, today);
+        sendMessage(`Good morning! Give me my daily brief — what's in my WhatsApp inbox, who needs a follow-up today, and what are my top 3 priorities right now?`);
+      }, 1500);
+      return () => clearTimeout(t);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Handle initial prompt (e.g. from "Ask AI about this candidate" button)
   useEffect(() => {
     if (initialPrompt) {

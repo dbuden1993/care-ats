@@ -463,7 +463,12 @@ export default function CandidatesView({ candidates, searchQuery, selected = new
                       {(c.name || '?')[0].toUpperCase()}
                     </div>
                     <div>
-                      <div className="ct-name">{highlightMatch(c.name || 'Unknown', searchQuery)}</div>
+                      <div className="ct-name" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {highlightMatch(c.name || 'Unknown', searchQuery)}
+                        {c.source === 'whatsapp' && !c.last_called_at && (
+                          <span title="WhatsApp contact" style={{ fontSize: 11, background: '#dcfce7', color: '#16a34a', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }}>WA</span>
+                        )}
+                      </div>
                       <div className="ct-phone">{fmtPhone(c.phone_e164)}</div>
                     </div>
                   </div>
@@ -520,7 +525,12 @@ export default function CandidatesView({ candidates, searchQuery, selected = new
                   )}
                 </td>
                 <td className="ct-td">
-                  <span className="ct-date">{fmtDate(c.last_called_at)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 12 }}>
+                      {c._last_activity && !c.last_called_at ? '💬' : c.last_called_at ? '📞' : ''}
+                    </span>
+                    <span className="ct-date">{fmtDate((c as any)._last_activity || c.last_called_at)}</span>
+                  </div>
                 </td>
                 <td className="ct-td">
                   <div className="ct-actions" style={{ opacity: isHovered || isSelected ? 1 : 0 }}>
