@@ -251,12 +251,15 @@ export async function POST(request: NextRequest) {
     }
 
     const payload: WebhookPayload = await request.json();
-    
+
     if (!payload.messages || payload.messages.length === 0) {
       return NextResponse.json({ success: true, processed: 0 }, { headers: corsHeaders });
     }
 
     console.log(`[WhatsApp Webhook] Received ${payload.messages.length} messages`);
+
+    // Only AI-analyze messages from the last 24 hours to avoid timeouts on large history batches
+    const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
 
     const results = [];
 
@@ -264,16 +267,18 @@ export async function POST(request: NextRequest) {
       try {
         // Find or create candidate
         const candidate = await findOrCreateCandidate(message.chatName, message.phone);
-        
-        // Store the message
+
+        // Store the message (always — regardless of age)
         const stored = await storeMessage(message, candidate?.id || null);
-        
-        // Analyze inbound messages
-        if (message.direction === 'inbound') {
+
+        // Only AI-analyze recent inbound messages (skip old history to prevent timeout)
+        const messageTime = message.timestamp ? new Date(message.timestamp).getTime() : 0;
+        const isRecent = messageTime > recentCutoff;
+
+        if (message.direction === 'inbound' && isRecent) {
           const analysis = await analyzeMessage(message);
-          
+
           if (analysis && candidate) {
-            // Update message with analysis
             if (stored) {
               await supabase
                 .from('whatsapp_messages')
@@ -284,29 +289,16 @@ export async function POST(request: NextRequest) {
                 })
                 .eq('id', stored.id);
             }
-            
-            // Update candidate intelligence
             await updateIntelligence(candidate.id, message.chatName, message.phone, analysis);
           }
-          
-          results.push({
-            messageId: message.id,
-            candidateId: candidate?.id,
-            analysis: analysis
-          });
+
+          results.push({ messageId: message.id, candidateId: candidate?.id, analysis });
         } else {
-          results.push({
-            messageId: message.id,
-            candidateId: candidate?.id,
-            analysis: null
-          });
+          results.push({ messageId: message.id, candidateId: candidate?.id, analysis: null });
         }
       } catch (msgError) {
         console.error(`Error processing message ${message.id}:`, msgError);
-        results.push({
-          messageId: message.id,
-          error: String(msgError)
-        });
+        results.push({ messageId: message.id, error: String(msgError) });
       }
     }
 
