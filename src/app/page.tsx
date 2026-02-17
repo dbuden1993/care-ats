@@ -20,6 +20,7 @@ import WhatsAppCampaign from './WhatsAppCampaign';
 import SMSCampaign from './SMSCampaign';
 import WhatsAppIntelligence from './WhatsAppIntelligence';
 import AssistantView from './AssistantView';
+import WhatsAppImportView from './WhatsAppImportView';
 import AIChatSidebar from './AIChatSidebar';
 import SearchBar from './SearchBar';
 import CandidateModal from './CandidateModal';
@@ -49,7 +50,7 @@ import type { Job, Pipeline, ViewMode, SidebarSection } from './types';
 
 const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
-type ExtendedSection = SidebarSection | 'whatsapp' | 'imported' | 'call-history' | 'sms' | 'candidate-dashboard' | 'whatsapp-intelligence' | 'assistant';
+type ExtendedSection = SidebarSection | 'whatsapp' | 'whatsapp-import' | 'imported' | 'call-history' | 'sms' | 'candidate-dashboard' | 'whatsapp-intelligence' | 'assistant';
 
 function Dashboard() {
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -306,6 +307,7 @@ function Dashboard() {
     ] },
     { section: 'OUTREACH', items: [
       { id: 'whatsapp', icon: '💬', label: 'WhatsApp Campaigns' },
+      { id: 'whatsapp-import', icon: '📲', label: 'Import Chat History' },
       { id: 'sms', icon: '📱', label: 'SMS Campaign' },
       { id: 'whatsapp-intelligence', icon: '🧠', label: 'AI Intelligence' },
     ] },
@@ -449,6 +451,10 @@ function Dashboard() {
 
         {section === 'whatsapp-intelligence' && (
           <WhatsAppIntelligence />
+        )}
+
+        {section === 'whatsapp-import' && (
+          <WhatsAppImportView />
         )}
 
         {section === 'sms' && (
