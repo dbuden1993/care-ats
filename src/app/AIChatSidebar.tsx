@@ -17,10 +17,10 @@ interface AIChatSidebarProps {
 }
 
 const QUICK_PROMPTS = [
-  'What needs my attention today?',
-  "Who hasn't been contacted this week?",
-  'Find me candidates for a new care package',
-  'How is my pipeline looking?',
+  "Who needs a reply in WhatsApp right now?",
+  "Who haven't I contacted in over 2 weeks?",
+  "What's my pipeline looking like — any blockers?",
+  "Find me available carers with DBS and a car",
 ];
 
 export default function AIChatSidebar({
@@ -94,7 +94,7 @@ export default function AIChatSidebar({
       const t = setTimeout(() => {
         setIsOpen(true);
         localStorage.setItem(lastBriefKey, today);
-        sendMessage(`Good morning! Give me my daily brief — what's in my WhatsApp inbox, who needs a follow-up today, and what are my top 3 priorities right now?`);
+        sendMessage(`Morning brief: check my WhatsApp inbox for anything urgent or unreplied, then get my overdue follow-ups. Give me a numbered list of exactly who to contact first today and why — use their actual names and what they said.`);
       }, 1500);
       return () => clearTimeout(t);
     }
