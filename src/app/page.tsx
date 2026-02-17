@@ -20,6 +20,7 @@ import WhatsAppCampaign from './WhatsAppCampaign';
 import SMSCampaign from './SMSCampaign';
 import WhatsAppIntelligence from './WhatsAppIntelligence';
 import AssistantView from './AssistantView';
+import AIChatSidebar from './AIChatSidebar';
 import SearchBar from './SearchBar';
 import CandidateModal from './CandidateModal';
 import JobModal from './JobModal';
@@ -76,7 +77,8 @@ function Dashboard() {
   const [callHistoryCount, setCallHistoryCount] = useState(0);
   const [totalCandidates, setTotalCandidates] = useState(0);
   const [assistantBadge, setAssistantBadge] = useState(0);
-  
+  const [aiChatPrompt, setAiChatPrompt] = useState<string | null>(null);
+
   const toast = useToast();
 
   const shortcuts = [
@@ -609,9 +611,16 @@ function Dashboard() {
       {showImport && <CandidateImport onClose={() => setShowImport(false)} onImportComplete={() => { fetchCandidates(); fetchImportedCount(); fetchTotalCandidates(); toast.success('Candidates imported successfully'); }} />}
       {scheduleCandidate && <ScheduleModal candidate={scheduleCandidate} onClose={() => setScheduleCandidate(null)} onSchedule={() => { toast.success('Interview scheduled'); setScheduleCandidate(null); }} />}
       {emailCandidate && <EmailComposer candidate={emailCandidate} onClose={() => setEmailCandidate(null)} onSend={(d: any) => { toast.success(`Email sent to ${d.to}`); setEmailCandidate(null); }} />}
-      {selectedCandidate && <CandidateDetailPanel candidate={selectedCandidate} onClose={() => setSelectedCandidate(null)} onUpdate={fetchCandidates} onSchedule={() => setScheduleCandidate(selectedCandidate)} onEmail={() => setEmailCandidate(selectedCandidate)} />}
+      {selectedCandidate && <CandidateDetailPanel candidate={selectedCandidate} onClose={() => setSelectedCandidate(null)} onUpdate={fetchCandidates} onSchedule={() => setScheduleCandidate(selectedCandidate)} onEmail={() => setEmailCandidate(selectedCandidate)} onAskAboutCandidate={(c) => setAiChatPrompt(`Brief me on ${c.name} — their WhatsApp messages, call history, current status, and what I should do next with them.`)} />}
       {showShortcuts && <ShortcutsHelp shortcuts={shortcuts} onClose={() => setShowShortcuts(false)} />}
       <BulkActionsBar selectedIds={selected} candidates={candidates} onClear={() => setSelected(new Set())} onUpdate={fetchCandidates} onEmail={() => {}} />
+      <AIChatSidebar
+        selectedCandidateId={selectedCandidate?.id}
+        selectedCandidateName={selectedCandidate?.name}
+        onSelectCandidate={setSelectedCandidate}
+        initialPrompt={aiChatPrompt}
+        onInitialPromptConsumed={() => setAiChatPrompt(null)}
+      />
     </div>
   );
 }

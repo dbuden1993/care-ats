@@ -14,6 +14,7 @@ interface Props {
   onUpdate: () => void;
   onSchedule: () => void;
   onEmail: () => void;
+  onAskAboutCandidate?: (candidate: any) => void;
 }
 
 interface CallRecord {
@@ -58,7 +59,7 @@ const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onSchedule, onEmail }: Props) {
+export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onSchedule, onEmail, onAskAboutCandidate }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [editing, setEditing] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
@@ -410,6 +411,7 @@ export default function CandidateDetailPanel({ candidate, onClose, onUpdate, onS
     { icon: '💬', label: 'WhatsApp', action: () => candidate.phone_e164 && window.open(`https://wa.me/${candidate.phone_e164.replace(/\D/g, '')}`, '_blank'), color: '#25d366' },
     { icon: '✉️', label: 'Email', action: onEmail, color: '#6366f1' },
     { icon: '📅', label: 'Schedule', action: onSchedule, color: '#f59e0b' },
+    { icon: '🤖', label: 'Ask AI', action: () => onAskAboutCandidate?.(candidate), color: '#8b5cf6' },
   ];
 
   const qualifications = [

@@ -46,7 +46,13 @@ function directionFromId(id) {
 
 function phoneFromId(id) {
   const m = id?.match(/(?:true|false)_(\d+)@/);
-  return m ? '+' + m[1] : null;
+  if (!m) return null;
+  const digits = m[1];
+  // E.164 max is 15 digits total (country code + subscriber number).
+  // WhatsApp sometimes stores internal IDs that look like long digit strings
+  // but aren't real phone numbers — reject those.
+  if (digits.length < 7 || digits.length > 15) return null;
+  return '+' + digits;
 }
 
 function getChatName() {

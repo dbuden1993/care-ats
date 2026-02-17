@@ -56,23 +56,27 @@ interface WebhookPayload {
 // Normalize phone number to E.164 format
 function normalizePhone(phone: string | null): string | null {
   if (!phone) return null;
-  
+
   let cleaned = phone.replace(/[\s\-\(\)\.]/g, '');
-  
+
   // UK numbers
   if (cleaned.startsWith('0')) {
     cleaned = '+44' + cleaned.slice(1);
   } else if (!cleaned.startsWith('+')) {
     cleaned = '+' + cleaned;
   }
-  
+
+  // E.164 validation: must be + followed by 7–15 digits
+  // Rejects malformed IDs that WhatsApp sometimes embeds in data-id attributes
+  if (!/^\+\d{7,15}$/.test(cleaned)) return null;
+
   return cleaned;
 }
 
 // Find or create candidate by phone/name
 async function findOrCreateCandidate(chatName: string, phone: string | null) {
   const normalizedPhone = normalizePhone(phone);
-  
+
   // Try to find by phone first
   if (normalizedPhone) {
     const { data: byPhone } = await supabase
@@ -80,10 +84,10 @@ async function findOrCreateCandidate(chatName: string, phone: string | null) {
       .select('id, name, phone_e164')
       .eq('phone_e164', normalizedPhone)
       .single();
-    
+
     if (byPhone) return byPhone;
   }
-  
+
   // Try to find by name (if it looks like a name, not a number)
   const looksLikeName = chatName && !/^\+?\d+$/.test(chatName);
   if (looksLikeName) {
@@ -93,26 +97,52 @@ async function findOrCreateCandidate(chatName: string, phone: string | null) {
       .ilike('name', `%${chatName}%`)
       .limit(1)
       .single();
-    
+
     if (byName) return byName;
   }
-  
-  // Create new candidate if we have a phone number
-  if (normalizedPhone) {
-    const { data: newCandidate } = await supabase
+
+  // Create new candidate — we need at least a name or a valid phone
+  if (normalizedPhone || looksLikeName) {
+    // Fetch org_id from an existing candidate (required NOT NULL column)
+    const { data: existing } = await supabase
+      .from('candidates')
+      .select('org_id')
+      .limit(1)
+      .single();
+
+    const orgId = existing?.org_id;
+    if (!orgId) {
+      console.error('[WhatsApp Webhook] Cannot create candidate — no org_id found');
+      return null;
+    }
+
+    // phone_e164 is NOT NULL in DB — use normalizedPhone, or fall back to the raw phone
+    const phoneToStore = normalizedPhone || (phone ? (phone.startsWith('+') ? phone : '+' + phone) : null);
+    if (!phoneToStore) {
+      console.error('[WhatsApp Webhook] Cannot create candidate — no phone number available');
+      return null;
+    }
+
+    const { data: newCandidate, error: insertError } = await supabase
       .from('candidates')
       .insert({
+        org_id: orgId,
         name: looksLikeName ? chatName : null,
-        phone_e164: normalizedPhone,
+        phone_e164: phoneToStore,
         status: 'new',
         source: 'whatsapp'
       })
       .select()
       .single();
-    
+
+    if (insertError) {
+      console.error('[WhatsApp Webhook] Failed to create candidate:', insertError.message);
+      return null;
+    }
+
     return newCandidate;
   }
-  
+
   return null;
 }
 
