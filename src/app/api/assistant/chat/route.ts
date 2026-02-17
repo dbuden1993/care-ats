@@ -218,21 +218,25 @@ async function getWhatsappInbox() {
     .limit(100);
 
   const msgs = data || [];
+  // Supabase returns related rows as arrays; pick the first element
   const format = (m: {
     chat_name: string;
-    candidates: { id: string; name: string | null; status: string } | null;
+    candidates: { id: string; name: string | null; status: string }[] | null;
     message_text: string;
     captured_at: string;
     ai_intent: string | null;
     ai_suggested_action: string | null;
-  }) => ({
-    candidate: (m.candidates as { id: string; name: string | null; status: string } | null)?.name || m.chat_name,
-    candidate_id: (m.candidates as { id: string; name: string | null; status: string } | null)?.id || null,
-    message: m.message_text,
-    when: m.captured_at,
-    intent: m.ai_intent,
-    action: m.ai_suggested_action,
-  });
+  }) => {
+    const cand = Array.isArray(m.candidates) ? m.candidates[0] : m.candidates;
+    return {
+      candidate: cand?.name || m.chat_name,
+      candidate_id: cand?.id || null,
+      message: m.message_text,
+      when: m.captured_at,
+      intent: m.ai_intent,
+      action: m.ai_suggested_action,
+    };
+  };
 
   return {
     urgent: msgs.filter(m => m.ai_suggested_action === 'urgent_response').map(format),
