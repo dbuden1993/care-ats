@@ -301,24 +301,23 @@ export async function POST(request: NextRequest) {
         // Store the message (always — regardless of age)
         const stored = await storeMessage(message, candidate?.id || null);
 
-        // Only AI-analyze recent inbound messages (skip old history to prevent timeout)
+        // Only AI-analyze genuinely new, recent, inbound messages
+        // stored is null when the upsert hit a duplicate (ignoreDuplicates: true) — skip those
         const messageTime = message.timestamp ? new Date(message.timestamp).getTime() : 0;
         const isRecent = messageTime > recentCutoff;
 
-        if (message.direction === 'inbound' && isRecent) {
+        if (message.direction === 'inbound' && isRecent && stored) {
           const analysis = await analyzeMessage(message);
 
           if (analysis && candidate) {
-            if (stored) {
-              await supabase
-                .from('whatsapp_messages')
-                .update({
-                  ai_intent: analysis.intent,
-                  ai_sentiment: analysis.sentiment,
-                  ai_suggested_action: analysis.suggestedAction
-                })
-                .eq('id', stored.id);
-            }
+            await supabase
+              .from('whatsapp_messages')
+              .update({
+                ai_intent: analysis.intent,
+                ai_sentiment: analysis.sentiment,
+                ai_suggested_action: analysis.suggestedAction
+              })
+              .eq('id', stored.id);
             await updateIntelligence(candidate.id, message.chatName, message.phone, analysis);
           }
 

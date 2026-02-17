@@ -275,16 +275,28 @@ export async function POST(request: NextRequest) {
       skipped += batch.length - batchInserted;
     }
 
-    // 5. AI-analyze last 5 inbound messages for candidate intelligence
+    // 5. AI-analyze last 5 inbound messages — only those not already tagged
     const recentInbound = parsed
       .filter(m => m.direction === 'inbound')
       .slice(-5);
+
+    // Check which of these already have ai_intent in DB (avoid re-analysis on re-import)
+    const recentIds = recentInbound.map(m => generateMessageId(m.sender, m.timestamp, m.text));
+    const { data: untaggedRows } = await supabase
+      .from('whatsapp_messages')
+      .select('message_id')
+      .in('message_id', recentIds)
+      .is('ai_intent', null);
+    const untaggedSet = new Set((untaggedRows || []).map(r => r.message_id));
 
     let analysisCount = 0;
     const keyInfoAccumulator: string[] = [];
     let lastSuggestedAction = 'no_action';
 
     for (const m of recentInbound) {
+      const msgId = generateMessageId(m.sender, m.timestamp, m.text);
+      if (!untaggedSet.has(msgId)) continue; // Already analysed — skip
+
       const analysis = await analyzeMessage(m.text);
       if (!analysis) continue;
       analysisCount++;
@@ -292,7 +304,6 @@ export async function POST(request: NextRequest) {
       lastSuggestedAction = analysis.suggestedAction;
 
       // Update the stored message row with AI tags
-      const msgId = generateMessageId(m.sender, m.timestamp, m.text);
       await supabase
         .from('whatsapp_messages')
         .update({

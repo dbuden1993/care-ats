@@ -21,8 +21,8 @@ export async function POST(request: NextRequest) {
       : conversationText;
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2000,
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1000,
       system: `You are an expert recruitment assistant analyzing WhatsApp conversations between a recruiter and a care worker candidate. 
 Extract useful information that would help the recruiter understand this candidate's availability, skills, preferences, and reliability.
 
