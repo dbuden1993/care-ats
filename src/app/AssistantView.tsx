@@ -85,6 +85,9 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
   const [replyState, setReplyState] = useState<ReplyState | null>(null);
   const [outlookConnected, setOutlookConnected] = useState(false);
   const [syncingEmail, setSyncingEmail] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<string | null>(null);
+  const [pendingBackfill, setPendingBackfill] = useState(0);
 
   const fetchWhatsAppInbox = useCallback(async () => {
     // Widen to 7 days so messages don't vanish after 48h
@@ -240,6 +243,16 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
     }
   }, []);
 
+  const fetchPendingBackfill = useCallback(async () => {
+    try {
+      const res = await fetch('/api/whatsapp-backfill');
+      if (res.ok) {
+        const data = await res.json();
+        setPendingBackfill(data.pending ?? 0);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -247,8 +260,9 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       fetchEmailInbox(),
       fetchFollowUps(),
       checkOutlookConnection(),
+      fetchPendingBackfill(),
     ]).finally(() => setLoading(false));
-  }, [fetchWhatsAppInbox, fetchEmailInbox, fetchFollowUps, checkOutlookConnection]);
+  }, [fetchWhatsAppInbox, fetchEmailInbox, fetchFollowUps, checkOutlookConnection, fetchPendingBackfill]);
 
   async function logCall(candidateId: string) {
     await supabase
@@ -256,6 +270,23 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       .update({ last_called_at: new Date().toISOString() })
       .eq('id', candidateId);
     setFollowUps(prev => prev.filter(c => c.id !== candidateId));
+  }
+
+  async function runBackfill() {
+    setBackfilling(true);
+    setBackfillResult(null);
+    try {
+      const res = await fetch('/api/whatsapp-backfill', { method: 'POST' });
+      const data = await res.json();
+      setBackfillResult(data.message || (data.ok ? 'Done.' : data.error));
+      setPendingBackfill(0);
+      // Refresh inbox — new AI tags may surface actionable messages
+      await fetchWhatsAppInbox();
+    } catch (e: any) {
+      setBackfillResult('Failed: ' + e.message);
+    } finally {
+      setBackfilling(false);
+    }
   }
 
   async function markDone(messageId: string) {
@@ -390,6 +421,26 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
         {/* WhatsApp Inbox */}
         {activeTab === 'inbox' && (
           <div>
+            {/* Backfill banner — shown when messages were saved with no AI tags */}
+            {pendingBackfill > 0 && (
+              <div style={{ background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 13, color: '#92400e', flex: 1 }}>
+                  <strong>{pendingBackfill}</strong> recent message{pendingBackfill !== 1 ? 's' : ''} have no AI analysis — saved while API credits were offline.
+                </span>
+                <button
+                  onClick={runBackfill}
+                  disabled={backfilling}
+                  style={{ padding: '7px 14px', fontSize: 12, fontWeight: 600, border: 'none', borderRadius: 7, background: backfilling ? '#d1d5db' : '#f59e0b', color: backfilling ? '#6b7280' : '#fff', cursor: backfilling ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  {backfilling ? '⏳ Analysing...' : '✨ Analyse now'}
+                </button>
+              </div>
+            )}
+            {backfillResult && (
+              <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '10px 16px', marginBottom: 16, fontSize: 13, color: '#166534' }}>
+                ✅ {backfillResult}
+              </div>
+            )}
             {whatsappMessages.length === 0 ? (
               <EmptyState
                 icon="💬"
