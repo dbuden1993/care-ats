@@ -407,7 +407,7 @@ function Dashboard() {
                     <>
                       <span>{item.label}</span>
                       {item.badge !== undefined && (
-                        <span className={`nav-badge ${item.badge === '!' ? 'alert' : ''}`}>
+                        <span className={`nav-badge ${typeof item.badge === 'string' ? 'alert' : ''}`}>
                           {item.badge}
                         </span>
                       )}
