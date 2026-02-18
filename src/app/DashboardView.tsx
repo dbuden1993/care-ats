@@ -61,6 +61,8 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
   const [pipeline, setPipeline] = useState<PipelineCounts>({ new: 0, screening: 0, interview: 0, offer: 0, hired: 0 });
   const [loading, setLoading] = useState(true);
   const [priorities, setPriorities] = useState<{ urgentWA: number; overdueFollowUps: number; interviewStage: number; waRepliesNeeded: number }>({ urgentWA: 0, overdueFollowUps: 0, interviewStage: 0, waRepliesNeeded: 0 });
+  const [reprocessing, setReprocessing] = useState(false);
+  const [reprocessResult, setReprocessResult] = useState<string | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
@@ -167,6 +169,22 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
     const interval = setInterval(fetchDashboardData, 2 * 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
+
+  const reprocessCalls = async () => {
+    setReprocessing(true);
+    setReprocessResult(null);
+    try {
+      const res = await fetch('/api/dialpad/reprocess?all=true', { method: 'POST' });
+      const data = await res.json();
+      const count = data.results?.length || 0;
+      setReprocessResult(count > 0 ? `✓ Triggered ${count} call(s) for processing` : 'No pending calls found');
+      // Refresh stats after a short delay
+      setTimeout(fetchDashboardData, 3000);
+    } catch {
+      setReprocessResult('Failed to trigger reprocessing');
+    }
+    setReprocessing(false);
+  };
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -335,9 +353,17 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
         <div className="dash-subtitle">
           Here&apos;s what needs your attention today
           {stats.pendingProcessing > 0 && (
-            <span style={{ marginLeft: 12, padding: '2px 10px', background: '#fef9c3', color: '#a16207', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>
-              {stats.pendingProcessing} call{stats.pendingProcessing !== 1 ? 's' : ''} processing
-            </span>
+            <button
+              onClick={reprocessCalls}
+              disabled={reprocessing}
+              title="Reprocess queued calls"
+              style={{ marginLeft: 12, padding: '2px 10px', background: reprocessing ? '#e5e7eb' : '#fef9c3', color: reprocessing ? '#9ca3af' : '#a16207', borderRadius: 6, fontSize: 11, fontWeight: 600, border: '1px solid #fde68a', cursor: reprocessing ? 'not-allowed' : 'pointer' }}
+            >
+              {reprocessing ? '⏳ Processing...' : `⚡ ${stats.pendingProcessing} queued — reprocess`}
+            </button>
+          )}
+          {reprocessResult && (
+            <span style={{ marginLeft: 8, fontSize: 11, color: '#059669' }}>{reprocessResult}</span>
           )}
         </div>
       </div>
