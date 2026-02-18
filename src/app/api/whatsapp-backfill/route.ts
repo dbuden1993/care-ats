@@ -67,20 +67,25 @@ export async function POST() {
     let analysed = 0;
     let skipped = 0;
 
-    for (const msg of messages) {
-      const analysis = await analyzeMessage(msg.message_text);
-      if (!analysis) { skipped++; continue; }
+    // Process in parallel batches of 5 — ~5x faster than serial, stays within rate limits
+    const BATCH = 5;
+    for (let i = 0; i < messages.length; i += BATCH) {
+      const batch = messages.slice(i, i + BATCH);
+      await Promise.all(batch.map(async (msg) => {
+        const analysis = await analyzeMessage(msg.message_text);
+        if (!analysis) { skipped++; return; }
 
-      await supabase
-        .from('whatsapp_messages')
-        .update({
-          ai_intent: analysis.intent,
-          ai_sentiment: analysis.sentiment,
-          ai_suggested_action: analysis.suggestedAction,
-        })
-        .eq('id', msg.id);
+        await supabase
+          .from('whatsapp_messages')
+          .update({
+            ai_intent: analysis.intent,
+            ai_sentiment: analysis.sentiment,
+            ai_suggested_action: analysis.suggestedAction,
+          })
+          .eq('id', msg.id);
 
-      analysed++;
+        analysed++;
+      }));
     }
 
     return NextResponse.json({

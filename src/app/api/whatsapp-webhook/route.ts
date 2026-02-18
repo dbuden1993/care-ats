@@ -303,7 +303,9 @@ export async function POST(request: NextRequest) {
 
         // Only AI-analyze genuinely new, recent, inbound messages
         // stored is null when the upsert hit a duplicate (ignoreDuplicates: true) — skip those
-        const messageTime = message.timestamp ? new Date(message.timestamp).getTime() : 0;
+        // Use capturedAt (ISO string set by the extension) — message.timestamp is WhatsApp's
+        // display string ("10:24 AM", "Yesterday") which new Date() cannot parse reliably
+        const messageTime = message.capturedAt ? new Date(message.capturedAt).getTime() : Date.now();
         const isRecent = messageTime > recentCutoff;
 
         if (message.direction === 'inbound' && isRecent && stored) {
