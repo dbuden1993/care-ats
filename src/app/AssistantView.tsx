@@ -289,12 +289,31 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
   async function runBackfill() {
     setBackfilling(true);
     setBackfillResult(null);
+    let totalAnalysed = 0;
     try {
-      const res = await fetch('/api/whatsapp-backfill', { method: 'POST' });
-      const data = await res.json();
-      setBackfillResult(data.message || (data.ok ? 'Done.' : data.error));
-      // Re-check how many remain — if > 0, banner stays visible so user can click again
-      await fetchPendingBackfill();
+      // Loop until all pending messages are processed — each batch is 30
+      while (true) {
+        const res = await fetch('/api/whatsapp-backfill', { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok) {
+          setBackfillResult('Error: ' + (data.error || 'Unknown error'));
+          break;
+        }
+        totalAnalysed += data.analysed || 0;
+        // Check how many remain
+        const countRes = await fetch('/api/whatsapp-backfill');
+        const countData = await countRes.json();
+        const remaining = countData.pending ?? 0;
+        setPendingBackfill(remaining);
+        if (remaining === 0) {
+          setBackfillResult(`✅ Done — ${totalAnalysed} messages analysed.`);
+          break;
+        }
+        // Show live progress and continue
+        setBackfillResult(`⏳ Analysed ${totalAnalysed} so far… ${remaining} remaining`);
+        // Small pause so the UI can breathe between Vercel invocations
+        await new Promise(r => setTimeout(r, 1000));
+      }
       // Refresh inbox — new AI tags may surface actionable messages
       await fetchWhatsAppInbox();
     } catch (e: any) {
@@ -440,8 +459,8 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
         {/* WhatsApp Inbox */}
         {activeTab === 'inbox' && (
           <div>
-            {/* Backfill banner — shown when messages were saved with no AI tags */}
-            {pendingBackfill > 0 && (
+            {/* Backfill banner — shown when messages need AI analysis or while running */}
+            {(pendingBackfill > 0 || backfilling) && (
               <div style={{ background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span style={{ fontSize: 13, color: '#92400e', flex: 1 }}>
                   <strong>{pendingBackfill}</strong> recent message{pendingBackfill !== 1 ? 's' : ''} have no AI analysis — saved while API credits were offline.
