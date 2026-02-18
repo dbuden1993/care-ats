@@ -293,7 +293,8 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
       const res = await fetch('/api/whatsapp-backfill', { method: 'POST' });
       const data = await res.json();
       setBackfillResult(data.message || (data.ok ? 'Done.' : data.error));
-      setPendingBackfill(0);
+      // Re-check how many remain — if > 0, banner stays visible so user can click again
+      await fetchPendingBackfill();
       // Refresh inbox — new AI tags may surface actionable messages
       await fetchWhatsAppInbox();
     } catch (e: any) {

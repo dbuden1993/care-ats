@@ -1,8 +1,11 @@
 // POST /api/whatsapp-backfill
 // Re-analyses inbound WhatsApp messages that have no AI tags (ai_intent = null)
 // Runs through last 7 days, calls Haiku per message, updates the row
+// Processes 30 at a time — call repeatedly until pending count reaches 0
 
 import { NextResponse } from 'next/server';
+
+export const maxDuration = 60; // Vercel max for Hobby plan
 import { createClient } from '@supabase/supabase-js';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -56,7 +59,7 @@ export async function POST() {
       .is('ai_intent', null)
       .gte('captured_at', cutoff)
       .order('captured_at', { ascending: true })
-      .limit(200);
+      .limit(30); // Keep well within 60s timeout (~30 × ~1s per Haiku call)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     if (!messages?.length) return NextResponse.json({ ok: true, analysed: 0, message: 'Nothing to backfill — all messages already have AI tags.' });
@@ -78,9 +81,6 @@ export async function POST() {
         .eq('id', msg.id);
 
       analysed++;
-
-      // Small delay to avoid rate limits
-      await new Promise(r => setTimeout(r, 200));
     }
 
     return NextResponse.json({
@@ -88,7 +88,7 @@ export async function POST() {
       total: messages.length,
       analysed,
       skipped,
-      message: `Done — ${analysed} messages analysed, ${skipped} skipped (media/too short).`,
+      message: `Done — ${analysed} analysed, ${skipped} skipped. Click again if more remain.`,
     });
 
   } catch (error: any) {
