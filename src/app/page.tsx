@@ -128,17 +128,18 @@ function Dashboard() {
           }
         }
 
-        // Merge and sort by true last activity (call or WhatsApp, whichever is more recent)
-        const merged = (rawCandidates || []).map(c => ({
-          ...c,
-          _last_activity: new Date(Math.max(
-            c.last_called_at ? new Date(c.last_called_at).getTime() : 0,
-            latestMsg[c.id] ? new Date(latestMsg[c.id]).getTime() : 0,
-            new Date(c.created_at).getTime(),
-          )).toISOString(),
-        }));
+        // Merge and sort by true last contact (call or WhatsApp — whichever is more recent)
+        // created_at is intentionally excluded: recently imported ≠ recently contacted
+        const merged = (rawCandidates || []).map(c => {
+          const callTime = c.last_called_at ? new Date(c.last_called_at).getTime() : 0;
+          const waTime = latestMsg[c.id] ? new Date(latestMsg[c.id]).getTime() : 0;
+          return {
+            ...c,
+            _last_activity: Math.max(callTime, waTime),
+          };
+        });
 
-        merged.sort((a, b) => new Date(b._last_activity).getTime() - new Date(a._last_activity).getTime());
+        merged.sort((a, b) => b._last_activity - a._last_activity);
         setCandidates(merged);
       }
     } catch (e) { console.error(e); }
