@@ -290,8 +290,8 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
     setBackfilling(true);
     setBackfillResult(null);
     let totalAnalysed = 0;
+    let lastRemaining = -1;
     try {
-      // Loop until all pending messages are processed — each batch is 30
       while (true) {
         const res = await fetch('/api/whatsapp-backfill', { method: 'POST' });
         const data = await res.json();
@@ -300,21 +300,25 @@ export default function AssistantView({ onSelectCandidate }: { onSelectCandidate
           break;
         }
         totalAnalysed += data.analysed || 0;
-        // Check how many remain
+        // Re-check pending count
         const countRes = await fetch('/api/whatsapp-backfill');
         const countData = await countRes.json();
         const remaining = countData.pending ?? 0;
         setPendingBackfill(remaining);
+
         if (remaining === 0) {
-          setBackfillResult(`✅ Done — ${totalAnalysed} messages analysed.`);
+          setBackfillResult(`✅ Done — ${totalAnalysed} analysed, ${data.skipped || 0} media/skipped cleared.`);
           break;
         }
-        // Show live progress and continue
+        // Safety: if count didn't decrease at all, the API must be failing — stop
+        if (remaining === lastRemaining) {
+          setBackfillResult(`⚠️ Stuck — API may be unavailable. ${remaining} messages remain. Try again later.`);
+          break;
+        }
+        lastRemaining = remaining;
         setBackfillResult(`⏳ Analysed ${totalAnalysed} so far… ${remaining} remaining`);
-        // Small pause so the UI can breathe between Vercel invocations
         await new Promise(r => setTimeout(r, 1000));
       }
-      // Refresh inbox — new AI tags may surface actionable messages
       await fetchWhatsAppInbox();
     } catch (e: any) {
       setBackfillResult('Failed: ' + e.message);
