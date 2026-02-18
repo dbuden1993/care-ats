@@ -91,10 +91,10 @@ export default function AIChatSidebar({
     const lastBriefKey = 'ai_last_brief_date';
     const lastBrief = typeof window !== 'undefined' ? localStorage.getItem(lastBriefKey) : null;
     if (lastBrief !== today) {
-      // Small delay so the app renders first
+      // Mark immediately so remounts within the delay window don't fire a second brief
+      localStorage.setItem(lastBriefKey, today);
       const t = setTimeout(() => {
         setIsOpen(true);
-        localStorage.setItem(lastBriefKey, today);
         sendMessage(`Morning brief: check my WhatsApp inbox for anything urgent or unreplied, then get my overdue follow-ups. Give me a numbered list of exactly who to contact first today and why — use their actual names and what they said.`);
       }, 1500);
       return () => clearTimeout(t);
