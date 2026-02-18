@@ -70,6 +70,17 @@ const tools: Anthropic.Tool[] = [
       required: ['role_description'],
     },
   },
+  {
+    name: 'search_content',
+    description: 'Full-text keyword search across call summaries, WhatsApp messages, and candidate notes. Use this when looking for a specific language, skill, characteristic, or anything mentioned in conversations (e.g. "Tamil", "live-in", "spinal injury", "night shifts"). Returns matching candidates with context.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        keyword: { type: 'string', description: 'Word or phrase to search for (case-insensitive)' },
+      },
+      required: ['keyword'],
+    },
+  },
 ];
 
 // ─── Tool implementations ────────────────────────────────────────────────────
@@ -433,6 +444,81 @@ async function matchCandidatesForRole(params: {
   };
 }
 
+async function searchContent(keyword: string) {
+  const kw = `%${keyword}%`;
+
+  // Search call summaries
+  const { data: calls } = await supabase
+    .from('call_history')
+    .select('phone_e164, call_summary, call_time, quality_assessment')
+    .ilike('call_summary', kw)
+    .order('call_time', { ascending: false })
+    .limit(30);
+
+  // Search WhatsApp messages
+  const { data: msgs } = await supabase
+    .from('whatsapp_messages')
+    .select('candidate_id, chat_name, message_text, captured_at, direction')
+    .ilike('message_text', kw)
+    .order('captured_at', { ascending: false })
+    .limit(30);
+
+  // Search candidate notes field
+  const { data: notesCands } = await supabase
+    .from('candidates')
+    .select('id, name, phone_e164, status, notes')
+    .ilike('notes', kw)
+    .limit(20);
+
+  // Resolve phone_e164 → candidate for call results
+  const phones = [...new Set((calls || []).map(c => c.phone_e164).filter(Boolean))];
+  const candIds = [...new Set((msgs || []).map(m => m.candidate_id).filter(Boolean))];
+  const allIds = [...new Set([...candIds])];
+
+  const [{ data: byPhone }, { data: byId }] = await Promise.all([
+    phones.length
+      ? supabase.from('candidates').select('id, name, status, phone_e164').in('phone_e164', phones)
+      : Promise.resolve({ data: [] }),
+    allIds.length
+      ? supabase.from('candidates').select('id, name, status, phone_e164').in('id', allIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const phoneMap: Record<string, any> = {};
+  for (const c of byPhone || []) if (c.phone_e164) phoneMap[c.phone_e164] = c;
+  const idMap: Record<string, any> = {};
+  for (const c of byId || []) idMap[c.id] = c;
+
+  // Deduplicate — collect all matching candidates with context snippets
+  const found = new Map<string, { name: string; status: string; id: string; matches: string[] }>();
+
+  for (const c of calls || []) {
+    const cand = phoneMap[c.phone_e164];
+    if (!cand) continue;
+    if (!found.has(cand.id)) found.set(cand.id, { name: cand.name, status: cand.status, id: cand.id, matches: [] });
+    found.get(cand.id)!.matches.push(`Call summary: "${c.call_summary?.slice(0, 150)}"`);
+  }
+  for (const m of msgs || []) {
+    const cand = m.candidate_id ? idMap[m.candidate_id] : null;
+    const key = cand?.id || m.chat_name;
+    if (!key) continue;
+    if (!found.has(key)) found.set(key, { name: cand?.name || m.chat_name, status: cand?.status || 'unknown', id: cand?.id || key, matches: [] });
+    found.get(key)!.matches.push(`${m.direction === 'inbound' ? 'They said' : 'You said'}: "${m.message_text?.slice(0, 150)}"`);
+  }
+  for (const c of notesCands || []) {
+    if (!found.has(c.id)) found.set(c.id, { name: c.name, status: c.status, id: c.id, matches: [] });
+    found.get(c.id)!.matches.push(`Notes: "${c.notes?.slice(0, 150)}"`);
+  }
+
+  const results = [...found.values()].map(r => ({ ...r, matches: r.matches.slice(0, 3) }));
+  return {
+    keyword,
+    total_matches: results.length,
+    candidates: results,
+    note: results.length === 0 ? `No mentions of "${keyword}" found in call summaries, messages, or notes.` : null,
+  };
+}
+
 // ─── Tool executor ─────────────────────────────────────────────────────────
 
 async function executeTool(name: string, input: Record<string, unknown>): Promise<unknown> {
@@ -443,6 +529,7 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
     case 'get_pipeline_stats': return getPipelineStats();
     case 'get_follow_ups_needed': return getFollowUpsNeeded();
     case 'match_candidates_for_role': return matchCandidatesForRole(input as any);
+    case 'search_content': return searchContent(input.keyword as string);
     default: return { error: `Unknown tool: ${name}` };
   }
 }
@@ -479,7 +566,7 @@ RULES:
 
     let currentMessages = [...messages];
 
-    for (let round = 0; round < 5; round++) {
+    for (let round = 0; round < 8; round++) {
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-5-20250929',
         max_tokens: 2000,
@@ -513,7 +600,7 @@ RULES:
       break;
     }
 
-    return NextResponse.json({ reply: 'I hit my limit. Please ask something more specific.' });
+    return NextResponse.json({ reply: 'I searched the database but ran out of processing rounds before forming a complete answer. Try asking a more specific question, or ask me to search for a specific keyword (e.g. "search for Tamil in call summaries").' });
   } catch (error: unknown) {
     console.error('[Assistant Chat] Error:', error);
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unknown error' }, { status: 500 });
