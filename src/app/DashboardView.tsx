@@ -170,6 +170,14 @@ export default function DashboardView({ candidates, jobs, onNavigate }: Dashboar
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
+  // Auto-reprocess pending calls whenever they appear — no manual click needed
+  useEffect(() => {
+    if (stats.pendingProcessing > 0 && !reprocessing) {
+      reprocessCalls();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stats.pendingProcessing]);
+
   const reprocessCalls = async () => {
     setReprocessing(true);
     setReprocessResult(null);

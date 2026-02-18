@@ -112,7 +112,7 @@ function Dashboard() {
           .order('last_called_at', { ascending: false, nullsFirst: false })
           .limit(300);
 
-        // Fetch the most recent WhatsApp message time per candidate (1 per candidate is enough)
+        // Fetch latest WhatsApp message time per candidate
         const { data: msgTimes } = await supabase
           .from('whatsapp_messages')
           .select('candidate_id, captured_at')
@@ -120,22 +120,36 @@ function Dashboard() {
           .order('captured_at', { ascending: false })
           .limit(1000);
 
-        // Build a map: candidate_id → latest message time
-        const latestMsg: Record<string, string> = {};
+        // Fetch latest call time from call_history by phone (includes unprocessed/queued calls)
+        const { data: callTimes } = await supabase
+          .from('call_history')
+          .select('phone_e164, call_time')
+          .order('call_time', { ascending: false })
+          .limit(500);
+
+        // Build lookup maps
+        const latestMsg: Record<string, number> = {};
         for (const m of msgTimes || []) {
           if (m.candidate_id && !latestMsg[m.candidate_id]) {
-            latestMsg[m.candidate_id] = m.captured_at;
+            latestMsg[m.candidate_id] = new Date(m.captured_at).getTime();
+          }
+        }
+        const latestCall: Record<string, number> = {};
+        for (const ch of callTimes || []) {
+          if (ch.phone_e164 && !latestCall[ch.phone_e164]) {
+            latestCall[ch.phone_e164] = new Date(ch.call_time).getTime();
           }
         }
 
-        // Merge and sort by true last contact (call or WhatsApp — whichever is more recent)
-        // created_at is intentionally excluded: recently imported ≠ recently contacted
+        // Sort by most recent true contact: raw call_history time (even if queued), WhatsApp, or last_called_at
+        // created_at excluded — recently imported ≠ recently contacted
         const merged = (rawCandidates || []).map(c => {
-          const callTime = c.last_called_at ? new Date(c.last_called_at).getTime() : 0;
-          const waTime = latestMsg[c.id] ? new Date(latestMsg[c.id]).getTime() : 0;
+          const processedCallTime = c.last_called_at ? new Date(c.last_called_at).getTime() : 0;
+          const rawCallTime = c.phone_e164 ? (latestCall[c.phone_e164] || 0) : 0;
+          const waTime = latestMsg[c.id] || 0;
           return {
             ...c,
-            _last_activity: Math.max(callTime, waTime),
+            _last_activity: Math.max(processedCallTime, rawCallTime, waTime),
           };
         });
 
